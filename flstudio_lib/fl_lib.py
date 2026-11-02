@@ -216,6 +216,44 @@ class _Hear:
         import listen_layer as L
         return L.match_sections(path_a, path_b, min_len)
 
+    def psycho(self, path: str, a: float | None = None, b: float | None = None,
+               which=("roughness", "tonality", "fluctuation")):
+        """ECMA-418-2: roughness (с полосами), tonality (с полосами), fluctuation.
+
+        Медленно по своей природе (~4.5× реального времени) — для точечных
+        проверок, а не для потока.
+        """
+        import listen_layer as L
+        sec = (a, b) if a is not None and b is not None else None
+        return L.psycho(path, sec, which)
+
+    def _py312(self) -> str:
+        return os.path.join(os.path.dirname(HERE), ".venv312", "Scripts", "python.exe")
+
+    def describe(self, path: str, start: float | None = None,
+                 dur: float | None = None) -> dict:
+        """Узнавание: размерность и норма эмбеддинга (не измерение!)."""
+        import subprocess
+        cmd = [self._py312(), os.path.join(HERE, "describe.py"), "embed", path]
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        return {"raw": (out.stdout or "").strip(), "err": (out.stderr or "").strip()[:200]}
+
+    def nearest(self, query: str, paths: list[str], start: float | None = None,
+                dur: float | None = None) -> list[tuple[str, float]]:
+        """Поиск самого похожего среди файлов (косинус эмбеддингов)."""
+        import subprocess
+        cmd = [self._py312(), os.path.join(HERE, "describe.py"), "near", query] + list(paths)
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        res = []
+        for line in (out.stdout or "").splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) == 2:
+                try:
+                    res.append((parts[1], float(parts[0])))
+                except ValueError:
+                    continue
+        return res
+
     def live(self, seconds: float = 20.0, start: float = 0.0, track: int | None = None) -> str:
         """Быстрый цикл: играем отрезок и пишем выход карты (без рендера).
 
@@ -582,12 +620,30 @@ class _Safe:
                       __import__("glob").glob(os.path.join(self._dir(), "*.json")))
 
 
+class _Judge:
+    """Приёмка правки по числам: значимость, цель, побочный ущерб, журнал."""
+
+    def verdict(self, before: dict, after: dict, goals: dict | None = None,
+                corridor: dict | None = None, tolerance: float = 0.0) -> dict:
+        import judge as J
+        return J.judge(before, after, goals or {}, corridor, tolerance)
+
+    def log(self, entry: dict) -> None:
+        import judge as J
+        J.log(entry)
+
+    def flatten(self, d: dict) -> dict:
+        import judge as J
+        return J.flatten(d)
+
+
 state = _State()
 hear = _Hear()
 act = _Act()
 monitor = _Monitor()
 sim = _Sim()
 predict = _Predict()
+judge = _Judge()
 create = _Create()
 
 

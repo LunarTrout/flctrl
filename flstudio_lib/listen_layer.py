@@ -249,6 +249,13 @@ def psycho(path: str, section=None, which=("roughness", "tonality", "fluctuation
                     val = float(v)
                     break
             out["roughness"] = val
+            spec = getattr(r, "specific_roughness", None)
+            if spec is not None:
+                out["roughness_bands"] = np.asarray(spec, dtype=float)
+                out["roughness_peak_band"] = int(np.nanargmax(out["roughness_bands"]))
+            over_time = getattr(r, "roughness_vs_time", None)
+            if over_time is not None:
+                out["roughness_vs_time"] = np.asarray(over_time, dtype=float)
         except Exception as e:
             out["roughness_err"] = "%s: %s" % (type(e).__name__, e)
     if "tonality" in which:
