@@ -361,6 +361,44 @@ rpc.exports = {
   },
   allocstr(s) { return Memory.allocUtf16String(s).toString(); },
   alloc(size) { return Memory.alloc(size).toString(); },
+  // --- микшерные дорожки (RVA найдены статически по FLEngine_x64.dll 25.2.5) ---
+  // 0x10A9850 -> qword -> u32  : число записей в массиве дорожек
+  // 0x10A9D28 -> qword -> u32  : индекс выбранной дорожки
+  // 0x10A7EB0 -> qword         : &tracks[0]   (шаг 0x1474)
+  trackinfo() {
+    const c = resolve(0x10A9850, 'fe').readPointer().readU32();
+    const s = resolve(0x10A9D28, 'fe').readPointer().readU32();
+    const a = resolve(0x10A7EB0, 'fe').readPointer();
+    return { count: c, selected: s, arr: a.toString() };
+  },
+  // da7b30(index, count, flags): вставка count дорожек в позицию index
+  trackadd(index, count, flags) {
+    ensurePump();
+    return onMain(() => {
+      const before = resolve(0x10A9850, 'fe').readPointer().readU32();
+      let a = index;
+      if (a === undefined || a === null || a < 1)
+        a = resolve(0x10A9D28, 'fe').readPointer().readU32();
+      // мастер (0) и служебная запись (count-1) не годятся как позиция вставки
+      if (a < 1 || a > before - 2) a = Math.max(1, before - 2);
+      const r = callAddr(resolve(0xDA7B30, 'fe'), [a, count, flags]).toString();
+      const after = resolve(0x10A9850, 'fe').readPointer().readU32();
+      return { ret: r, index: a, count: count, flags: flags, before: before, after: after };
+    });
+  },
+  // da86c0(int *list, lastIdx, flags): удаление дорожек из списка
+  trackdel(index, flags) {
+    ensurePump();
+    return onMain(() => {
+      const buf = Memory.alloc(8);
+      buf.writeU32(index >>> 0);
+      (globalThis.__keep = globalThis.__keep || []).push(buf);
+      const before = resolve(0x10A9850, 'fe').readPointer().readU32();
+      const r = callAddr(resolve(0xDA86C0, 'fe'), [buf, 0, flags]).toString();
+      const after = resolve(0x10A9850, 'fe').readPointer().readU32();
+      return { ret: r, index: index, flags: flags, before: before, after: after };
+    });
+  },
   evaljs(code) { return eval(code); },
   scanpat(pat, max) {
     const hits = [];
@@ -578,6 +616,39 @@ class Daemon:
                     res["fl_valid"] = slot_valid(tr, sl)
                 except Exception as e:
                     res["fl_valid"] = "ERR " + str(e)[:80]
+                return {"ok": True, "data": res}
+            if op in ("trackcount", "trackinfo"):
+                info = self.script.exports_sync.trackinfo()
+                if op == "trackcount":
+                    return {"ok": True, "data": info.get("count")}
+                return {"ok": True, "data": info}
+            if op in ("trackadd", "trackdel"):
+                idx = req.get("index")
+                flg = int(req.get("flags", 7 if op == "trackadd" else 0x12))
+                cur = self.script.exports_sync.trackinfo().get("count") or 0
+                # 0 -- мастер, count-1 -- служебная запись "Current": их не трогаем
+                if idx is not None:
+                    idx = int(idx)
+                    if idx < 1 or idx > max(1, cur - 2):
+                        return {"ok": False,
+                                "error": "index %d вне диапазона 1..%d (count=%d)"
+                                         % (idx, max(1, cur - 2), cur)}
+                if op == "trackadd":
+                    if int(req.get("count", 1)) < 1 or cur + int(req.get("count", 1)) > 502:
+                        return {"ok": False, "error": "не влезает: count=%d, просят +%d"
+                                                      % (cur, int(req.get("count", 1)))}
+                    fut = self.pool.submit(self.script.exports_sync.trackadd,
+                                           idx, int(req.get("count", 1)), flg)
+                else:
+                    if idx is None:
+                        return {"ok": False, "error": "index обязателен"}
+                    fut = self.pool.submit(self.script.exports_sync.trackdel, idx, flg)
+                res = fut.result(timeout=req.get("timeout", 90))
+                time.sleep(1.0)          # движок применяет изменение на ближайшем тике
+                try:
+                    res["fl_trackCount"] = int(bridge("mixer.trackCount()"))
+                except Exception as e:
+                    res["fl_trackCount"] = "ERR " + str(e)[:60]
                 return {"ok": True, "data": res}
             if op == "slot":
                 return {"ok": True, "data": {"valid": slot_valid(req["track"], req["slot"]),
@@ -835,6 +906,23 @@ def main(argv=None) -> int:
     sl.add_argument("--track", type=int, default=None)
     sl.add_argument("--port", type=int, default=9790)
 
+    tc = sub.add_parser("trackcount", help="число дорожек микшера из памяти движка")
+    tc.add_argument("--port", type=int, default=9790)
+
+    ta = sub.add_parser("trackadd", help="вставить дорожку(и) микшера (родная функция FL)")
+    ta.add_argument("--index", type=int, default=None,
+                    help="куда вставлять; по умолчанию — выбранная дорожка, как в меню FL")
+    ta.add_argument("--count", type=int, default=1)
+    ta.add_argument("--flags", type=int, default=7)
+    ta.add_argument("--port", type=int, default=9790)
+    ta.add_argument("--flp", default=os.path.join(os.path.dirname(SMALL), "small_drum.flp"))
+
+    td = sub.add_parser("trackdel", help="удалить дорожку микшера (родная функция FL)")
+    td.add_argument("index", type=int)
+    td.add_argument("--flags", type=int, default=0x12)
+    td.add_argument("--port", type=int, default=9790)
+    td.add_argument("--flp", default=os.path.join(os.path.dirname(SMALL), "small_drum.flp"))
+
     for name, hlp in (("insert", "вставить плагин в слот (живой вызов движка)"),
                       ("delete", "удалить плагин из слота (родная функция FL)"),
                       ("replace", "заменить плагин в слоте (unload + load)")):
@@ -878,6 +966,26 @@ def main(argv=None) -> int:
                 req["force"] = bool(getattr(a, "force", False))
         if daemon_alive(a.port):
             resp = send(req, a.port)
+        else:
+            print("демон на %d не отвечает — поднимаю FL с %s" % (a.port, a.flp), flush=True)
+            dm = Daemon(a.flp, a.port)
+            dm.start()
+            wait_bridge()
+            resp = dm.run_op(req)
+        print(json.dumps(resp, ensure_ascii=False, indent=1, default=str)[:4000])
+        return 0 if resp.get("ok") else 6
+
+    if a.cmd in ("trackcount", "trackadd", "trackdel"):
+        req = {"op": a.cmd}
+        if a.cmd == "trackadd":
+            req["index"] = a.index
+            req["count"] = a.count
+            req["flags"] = a.flags
+        elif a.cmd == "trackdel":
+            req["index"] = a.index
+            req["flags"] = a.flags
+        if daemon_alive(a.port):
+            resp = send(req, a.port, timeout=120)
         else:
             print("демон на %d не отвечает — поднимаю FL с %s" % (a.port, a.flp), flush=True)
             dm = Daemon(a.flp, a.port)

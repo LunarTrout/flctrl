@@ -109,6 +109,19 @@ def fl_automation(flp: str | None = None) -> list:
     return fl.state.automation(flp) if flp else fl.state.automation(_current_flp())
 
 
+@mcp.tool()
+def fl_routing(track: int) -> list:
+    """Куда дорожка шлёт: список [получатель, уровень]. Уровень 0 = посыл выключен."""
+    return [[d, lvl] for d, lvl in fl.state.routing(track)]
+
+
+@mcp.tool()
+def fl_set_route(track: int, dest: int, level: float) -> dict:
+    """Включить/выключить посыл: level=0 выключает, 0.8 — обычный уровень."""
+    fl.act.route(track, dest, level)
+    return {"track": track, "dest": dest, "level": level}
+
+
 # ---------------------------------------------------------------- слух
 
 @mcp.tool()
@@ -244,6 +257,31 @@ def fl_plugin_file(track: int, slot: int, fst: str) -> dict:
 def fl_reload(flp: str | None = None) -> dict:
     """Перечитать проект в FL (нужно после правки .flp)."""
     return {"result": fl.create.reload(flp or _current_flp())}
+
+
+@mcp.tool()
+def fl_live_track_add(index: int | None = None, count: int = 1) -> dict:
+    """Создать дорожку в микшере вживую (index None — в конец)."""
+    return fl.create.live_track_add(index, count)
+
+
+@mcp.tool()
+def fl_live_track_delete(index: int) -> dict:
+    """Удалить дорожку микшера вживую (штатное удаление с undo)."""
+    return fl.create.live_track_delete(index)
+
+
+@mcp.tool()
+def fl_live_track_count() -> dict:
+    """Сколько дорожек в микшере — из движка и из API, для сверки."""
+    return fl.create.live_track_count()
+
+
+@mcp.tool()
+def fl_reload_midi(port: int = 9790) -> dict:
+    """Перезагрузить MIDI-скрипты (аналог Update MIDI scripts), без кликов."""
+    import fl_midi_reload
+    return fl_midi_reload.reload_midi_scripts(port=port)
 
 
 # ---------------------------------------------------------------- проверка

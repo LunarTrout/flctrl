@@ -167,6 +167,30 @@ class _State:
                             "pan": row[3], "fx": row[4]})
         return out
 
+    def routing(self, track: int, dests: list | None = None) -> list:
+        """Куда дорожка шлёт: список (получатель, уровень).
+
+        Сначала спрашиваем, какие посылы вообще включены (getRouteSendActive —
+        переживает перебор всех дорожек), потом уточняем уровень у каждого.
+        Напрямую перебирать уровни нельзя: на части индексов FL отвечает
+        «Index out of range».
+        """
+        n = int(self._live("mixer.trackCount()"))
+        cand = dests if dests is not None else list(range(n))
+        expr = "[d for d in %s if mixer.getRouteSendActive(%d, d)]" % (cand, track)
+        try:
+            active = _parse(self._live(expr))
+        except Exception:
+            active = []
+        out = []
+        for d in active:
+            try:
+                lvl = float(self._live("mixer.getRouteToLevel(%d, %d)" % (track, int(d))))
+            except Exception:
+                lvl = -1.0
+            out.append((int(d), lvl))
+        return out
+
     def health(self) -> dict:
         """Живо ли управление и что именно не так. Не бросает исключение."""
         import subprocess
@@ -202,18 +226,6 @@ class _State:
     def tempo(self):
         import q
         return self._live(q.LIVE_EXPR["tempo"])
-
-    def routing(self):
-        """Маршруты: для каждой дорожки — список получателей.
-
-        Читается живьём: перебираем все пары и оставляем включённые.
-        Требует открытого FL (мост на 9787).
-        """
-        expr = ("__import__('json').dumps({str(i): [d for d in range(mixer.trackCount())"
-                " if mixer.getRouteToLevel(i, d) > 0] for i in range(mixer.trackCount())})")
-        raw = self._live(expr)
-        import json
-        return json.loads(raw) if raw else {}
 
     def clip_files(self, flp: str):
         """Связь «клип → файл»: позиция, длина, канал и путь к аудио.
@@ -450,6 +462,10 @@ class _Act:
 
     def solo(self, track: int, state: bool):
         return _State._live("mixer.soloTrack(%d, %r)" % (track, state))
+
+    def route(self, track: int, dest: int, level: float):
+        """Включить/выключить посыл (level=0 выключает)."""
+        return _State._live("mixer.setRouteToLevel(%d, %d, %r)" % (track, dest, level))
 
     def param(self, track: int, slot: int, index: int, value: float):
         return _State._live("plugins.setParamValue(%r, %d, %d, %d)"
@@ -774,6 +790,39 @@ class _Create:
         if self._LIVE:
             return self._live_op("slots", track=track)
         return self._live_run(["slots", "--track", track], port)
+
+    # ---- дорожки микшера (живое создание/удаление через движок) ----------------
+    # FLEngine_x64.dll 25.2.5:
+    #   0xDA7B30  InsertMixerTracks(index, count, flags)  — вставка дорожек
+    #   0xDA86C0  DeleteMixerTracks(int *list, lastIdx, flags) — удаление дорожек
+    def live_track_add(self, index: int | None = None, count: int = 1,
+                       flags: int = 7, port: int | None = None) -> dict:
+        """Вставить дорожку микшера вживую.
+
+        index=None — как в меню FL: вставка на месте выбранной дорожки.
+        index=N    — явная позиция; count — сколько дорожек сразу.
+        Возвращает before/after счётчика движка и mixer.trackCount() из API.
+        """
+        if self._LIVE:
+            return self._live_op("trackadd", index=index, count=count, flags=flags)
+        argv = ["trackadd"]
+        if index is not None:
+            argv += ["--index", str(index)]
+        argv += ["--count", str(count), "--flags", str(flags)]
+        return self._live_run(argv, port)
+
+    def live_track_delete(self, index: int, flags: int = 0x12,
+                          port: int | None = None) -> dict:
+        """Удалить дорожку микшера вживую (штатная функция движка, с undo-записью)."""
+        if self._LIVE:
+            return self._live_op("trackdel", index=index, flags=flags)
+        return self._live_run(["trackdel", str(index), "--flags", str(flags)], port)
+
+    def live_track_count(self, port: int | None = None) -> dict:
+        """Число дорожек микшера из памяти движка (для проверки add/delete)."""
+        if self._LIVE:
+            return self._live_op("trackcount")
+        return self._live_run(["trackcount"], port)
 
     def render(self, flp: str, timeout_s: int = 900, fmt: str = "wav") -> str:
         """Отрисовать проект через CLI FL (FL должен быть закрыт).
