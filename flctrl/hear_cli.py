@@ -97,6 +97,29 @@ def main(argv=None) -> int:
         b = float(args[args.index("--b") + 1]) if "--b" in args else None
         _out(L.psycho(path, section=(a, b) if a is not None and b is not None else None))
         return 0
+    if cmd == "attribute":
+        # частичная громкость: сколько каждого источника реально слышно
+        import partial
+
+        stems = json.loads(open(args[1], encoding="utf-8").read()) if len(args) > 1 else {}
+        a = float(args[args.index("--a") + 1]) if "--a" in args else None
+        b = float(args[args.index("--b") + 1]) if "--b" in args else None
+        _out(partial.attribute(args[0], stems, a, b))
+        return 0
+    if cmd == "balance":
+        import balance
+
+        mode = args[1]
+        if mode == "build":
+            refs = args[2]
+            out = args[3] if len(args) > 3 else None
+            _out(balance.build(refs, out))
+            return 0
+        if mode == "project":
+            mapping = json.loads(open(args[2], encoding="utf-8").read())
+            mix = args[3] if len(args) > 3 else None
+            _out(balance.project(mapping, mix))
+            return 0
     if cmd == "describe":
         import fl_lib as fl
         _out(fl.hear.describe(args[0]))

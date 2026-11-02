@@ -466,6 +466,33 @@ class _Hear:
             except OSError:
                 pass
 
+    def attribute(self, mix_path: str, stems: dict, a: float | None = None,
+                  b: float | None = None):
+        """Сколько каждого источника реально СЛЫШНО в миксе.
+
+        Частичная громкость `N_partial = N(микс) − N(микс без источника)` и
+        слышимость `A = N_partial / N_solo`, плюс измеренная чувствительность
+        `dN_per_db`. В отличие от долей полос, учитывает маскировку: тихий, но
+        незамаскированный источник получает высокую A, громкий и задавленный —
+        низкую.
+        """
+        import json as _json
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            _json.dump(stems, f, ensure_ascii=False)
+            stems_path = f.name
+        args = [mix_path, stems_path]
+        if a is not None and b is not None:
+            args += ["--a", str(a), "--b", str(b)]
+        try:
+            return _hear_cli("attribute", *args)
+        finally:
+            try:
+                os.unlink(stems_path)
+            except OSError:
+                pass
+
     def psycho(self, path: str, a: float | None = None, b: float | None = None):
         """Шероховатость, тональность, флуктуация (ECMA-418-2)."""
         args = [path]
@@ -1237,6 +1264,59 @@ class _Judge:
         return J.flatten(d)
 
 
+class _Balance:
+    """Жанровая модель баланса: цели из корпуса, правки по слышимости.
+
+    Все тяжёлые шаги (сборка модели, проекция проекта) идут в окружение со
+    phonometry через hear_cli; `solve` и `check` — чистая арифметика здесь.
+    """
+
+    def build(self, refs_dir: str, out: str | None = None):
+        """Собрать распределение по ролям из корпуса референсов."""
+        args = ["build", refs_dir] + ([out] if out else [])
+        return _hear_cli("balance", *args, timeout=3600)
+
+    def project(self, mapping: dict, mix_path: str | None = None):
+        """Вектор слышимости проекта: роль -> A, доля, dN/dB."""
+        import json as _json
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            _json.dump(mapping, f, ensure_ascii=False)
+            path = f.name
+        try:
+            args = ["project", path] + ([mix_path] if mix_path else [])
+            return _hear_cli("balance", *args, timeout=3600)
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    def solve(self, vec: dict, model: dict, cap_db: float = 6.0,
+              deadband: float = 0.05) -> dict:
+        """Каким ролям и на сколько дБ двинуть фейдер (с капом и предсказанием)."""
+        import balance as B
+        return B.solve(vec, model, cap_db=cap_db, deadband=deadband)
+
+    def check(self, before: dict, after: dict, model: dict) -> dict:
+        """Приёмка: стало ли ближе к модели по слышимости и доле."""
+        import balance as B
+        return B.check(before, after, model)
+
+    def roles(self, mapping_or_dir: dict | str) -> dict:
+        """Разложить дорожки по ролям (по именам, затем по спектру)."""
+        import roles as R
+        if isinstance(mapping_or_dir, str):
+            import glob
+            items = []
+            for path in sorted(glob.glob(os.path.join(mapping_or_dir, "*.wav"))):
+                items.append((os.path.splitext(os.path.basename(path))[0], path))
+            return R.group(items)
+        return R.group([(k, v if isinstance(v, str) else None)
+                        for k, v in mapping_or_dir.items()])
+
+
 state = _State()
 link = _Link()
 hear = _Hear()
@@ -1246,6 +1326,7 @@ sim = _Sim()
 predict = _Predict()
 judge = _Judge()
 create = _Create()
+balance = _Balance()
 
 
 def safe() -> _Safe:
