@@ -226,6 +226,27 @@ def fl_render_watch(project_dir: str, since_ts: float = 0.0, fmt: str = "wav",
 
 
 @tool
+def fl_stems_report(stem_dir: str, refs_dir: str = "", prefix: str = "",
+                    a: float = 0.0, b: float = 30.0) -> dict:
+    """Профиль всех стемов папки и расхождение с референсами по группам.
+
+    stem_dir — папка с дорожками после Split mixer tracks, prefix — общая часть
+    имени (например 'vers1_'), refs_dir — папка с референсными стемами
+    (подпапки drums/bass/other/vocals.wav). Возвращает строки, отсортированные
+    по убыванию ошибки: первыми идут дорожки, которые сильнее всего расходятся.
+    """
+    import stems as S
+    return S.report(stem_dir, refs_dir or None, prefix=prefix, a=a, b=b)
+
+
+@tool
+def fl_drums_balance(path: str, a: float = 0.0, dur: float = 30.0) -> dict:
+    """Бочка/малый/тело/железо и плотность атак в файле (обычно стем барабанов)."""
+    import stems as S
+    return S.drums_balance(path, a, dur)
+
+
+@tool
 def fl_health() -> dict:
     """Живо ли управление: запущена ли FL, отвечает ли контроллер, сколько дорожек."""
     return fl.state.health()
@@ -308,8 +329,11 @@ def fl_profile(path: str) -> dict:
 
 @tool
 def fl_sections(path: str) -> dict:
-    """Секции трека по плотности."""
-    return hear("sections", path)
+    """Секции трека по плотности (границы в секундах и уровень)."""
+    res = hear("sections", path)
+    if isinstance(res, list):
+        return {"sections": res}
+    return res
 
 
 @tool
@@ -388,6 +412,19 @@ def fl_set_param(track: int, slot: int, index: int, value: float) -> dict:
     """Поставить ручку плагина (0..1)."""
     fl.act.param(track, slot, index, value)
     return {"track": track, "slot": slot, "index": index, "value": value}
+
+
+@tool
+def fl_set_params(track: int, slot: int, values: dict, gap: float = 0.12) -> dict:
+    """Записать пачку параметров плагина безопасно (с паузами и стопом).
+
+    values — {индекс: значение}. Каждая запись идёт отдельным сообщением в
+    UI-поток FL, и очередь из десятков подряд (особенно на играющем
+    транспорте) роняет движок: отсюда пауза gap секунд между записями и
+    автосохранение каждые четыре.
+    """
+    items = {int(k): float(v) for k, v in (values or {}).items()}
+    return fl.act.param_batch(track, slot, items, gap=gap)
 
 
 # ---------------------------------------------------------------- создание

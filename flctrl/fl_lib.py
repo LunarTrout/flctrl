@@ -43,6 +43,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "flpresearch"))
 
+# кэш найденных интерпретаторов: {"torch": path, ...}
+_PY_CACHE: dict[str, str] = {}
+
 
 # ---------------------------------------------------------------- разбор ответов
 
@@ -491,7 +494,40 @@ class _Hear:
         return _json.loads(p.stdout.strip().splitlines()[-1])
 
     def _py312(self) -> str:
-        return os.path.join(os.path.dirname(HERE), ".venv312", "Scripts", "python.exe")
+        """Интерпретатор с torch для эмбеддингов (describe/mixstyle).
+
+        Раньше путь вбивался как <репозиторий>/.venv312, а окружение лежит в
+        соседней рабочей папке — отсюда FileNotFoundError. Теперь кандидаты
+        проверяются импортом torch.
+        """
+        cached = _PY_CACHE.get("torch")
+        if cached:
+            return cached
+        import glob
+        import subprocess
+        env = os.environ.get("FLCTRL_PY_TORCH")
+        root = os.path.dirname(HERE)
+        candidates = [env] if env else []
+        candidates += [os.path.join(root, ".venv312", "Scripts", "python.exe"),
+                       os.path.join(root, "..", "flstudio-mcp", ".venv312", "Scripts",
+                                    "python.exe"),
+                       os.path.join(root, "..", ".venv312", "Scripts", "python.exe")]
+        candidates += glob.glob(os.path.join(root, "..", "*", ".venv312", "Scripts",
+                                             "python.exe"))
+        candidates.append(sys.executable)
+        for path in candidates:
+            path = os.path.abspath(path) if path else ""
+            if not path or not os.path.exists(path):
+                continue
+            try:
+                probe = subprocess.run([path, "-c", "import torch"],
+                                       capture_output=True, timeout=120)
+            except Exception:
+                continue
+            if probe.returncode == 0:
+                _PY_CACHE["torch"] = path
+                return path
+        raise RuntimeError("нет интерпретатора с torch (задайте FLCTRL_PY_TORCH)")
 
     def style(self, path: str, start: float | None = None,
               dur: float | None = None) -> dict:
@@ -638,6 +674,38 @@ class _Act:
     def param(self, track: int, slot: int, index: int, value: float):
         return self._do("plugins.setParamValue(%r, %d, %d, %d)"
                         % (value, index, track, slot))
+
+    def param_batch(self, track: int, slot: int, values, gap: float = 0.12,
+                    stop_transport: bool = True):
+        """Записать несколько параметров плагина безопасно.
+
+        Зачем: каждая запись — сообщение в UI-поток FL, и очередь из десятков
+        подряд (особенно на играющем транспорте) роняет движок в USER32.
+        Здесь транспорт останавливается, записи идут с паузой, а между
+        пачками проект сохраняется.
+
+        values — список пар (индекс, значение) или словарь {индекс: значение}.
+        """
+        import time as _time
+        items = list(values.items()) if isinstance(values, dict) else list(values)
+        if stop_transport:
+            try:
+                if int(_State._live("transport.isPlaying()")):
+                    _State._live("transport.stop()")
+                    _time.sleep(0.35)
+            except Exception:
+                pass
+        written = []
+        for i, (index, value) in enumerate(items, start=1):
+            _State._live("plugins.setParamValue(%r, %d, %d, %d)"
+                         % (value, index, track, slot))
+            written.append(index)
+            _time.sleep(gap)
+            if i % 4 == 0:
+                self._persist()
+                _time.sleep(0.08)
+        self._persist()
+        return {"written": written, "gap_s": gap, "stopped": bool(stop_transport)}
 
     def params(self, track: int, slot: int):
         return _State._live(

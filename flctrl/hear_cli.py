@@ -107,6 +107,7 @@ def main(argv=None) -> int:
         _out(fl.hear.nearest(args[0], paths))
         return 0
     if cmd == "style":
+        import fl_lib as fl
         _out({"similarity": fl.hear.style_sim(args[0], args[1])})
         return 0
     print("неизвестная команда: %s" % cmd)

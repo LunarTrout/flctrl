@@ -146,9 +146,26 @@ def render(flp: str, fmt: str = "wav", timeout_s: float = 3600,
             raise RuntimeError("FL запущена: CLI-рендер требует закрытой FL")
         if not close_fl():
             raise RuntimeError("FL не закрылась штатно")
-    before = _wavs(project_dir, fmt)
+
+    # FL понимает /R как папку или как имя файла: если передали каталог,
+    # результат уйдёт туда, иначе — в папку проекта с именем проекта.
+    out = out_name or "render"
+    target_dir = out if os.path.isabs(out) else os.path.join(project_dir, out)
+    if not os.path.splitext(out)[1]:
+        os.makedirs(target_dir, exist_ok=True)
+        search_dirs = [target_dir, project_dir]
+    else:
+        search_dirs = [os.path.dirname(target_dir) or project_dir, project_dir]
+
+    def collect() -> dict:
+        found = {}
+        for directory in search_dirs:
+            found.update(_wavs(directory, fmt))
+        return found
+
+    before = collect()
     started = time.time()
-    args = [FL_EXE, "/E" + fmt, "/R" + (out_name or "render"), flp]
+    args = [FL_EXE, "/E" + fmt, "/R" + out, flp]
     subprocess.Popen(args, cwd=os.path.dirname(FL_EXE),
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -156,7 +173,7 @@ def render(flp: str, fmt: str = "wav", timeout_s: float = 3600,
     seen = dict(before)
     while time.time() - started < timeout_s:
         time.sleep(3.0)
-        now = _wavs(project_dir, fmt)
+        now = collect()
         if now != seen:
             seen = now
             last_change = time.time()
@@ -167,7 +184,7 @@ def render(flp: str, fmt: str = "wav", timeout_s: float = 3600,
                 path not in before for path in now):
             break
 
-    new = [path for path in _wavs(project_dir, fmt) if path not in before]
+    new = [path for path in collect() if path not in before]
     return {"ok": bool(new), "files": sorted(new),
             "split": len(new) > 1,
             "elapsed_s": round(time.time() - started, 1)}
