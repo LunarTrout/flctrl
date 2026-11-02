@@ -48,8 +48,14 @@ def _sum_to_file(paths: list[str], out: str) -> str:
 
 
 def project(mapping: dict[str, Any], mix_path: str | None = None,
-            a: float | None = None, b: float | None = None) -> dict:
-    """Вектор слышимости проекта: роль -> A, доля, N_partial, dN/dB."""
+            a: float | None = None, b: float | None = None,
+            max_seconds: float | None = 30.0) -> dict:
+    """Вектор слышимости проекта: роль -> A, доля, N_partial, dN/dB.
+
+    `max_seconds`: по умолчанию берём первые 30 секунд окна — модель
+    Мура-Гласберга дорогая, а для оценки баланса этого достаточно. Полная
+    длина нужна только для отчётности, не для решения.
+    """
     import partial
 
     tmp = tempfile.mkdtemp(prefix="flbalance_")
@@ -59,6 +65,12 @@ def project(mapping: dict[str, Any], mix_path: str | None = None,
             paths[role] = _sum_to_file(list(value), os.path.join(tmp, role + ".wav"))
         else:
             paths[role] = value
+
+    if max_seconds and b is not None and a is not None:
+        b = min(b, a + max_seconds)
+    elif max_seconds:
+        b = max_seconds
+        a = 0.0
 
     if mix_path is None:
         mix_path = os.path.join(tmp, "_mix.wav")

@@ -69,7 +69,7 @@ def bands(x: np.ndarray, fs: int, hop_s: float = 0.10):
     return lv, t
 
 
-def bands29(x: np.ndarray, fs: int, hop_s: float = 0.10) -> tuple[np.ndarray, np.ndarray]:
+def bands29(x: np.ndarray, fs: int, hop_s: float = 0.20) -> tuple[np.ndarray, np.ndarray]:
     """Покадровые уровни 29 третьоктавных полос (25 Гц…16 кГц), dB SPL.
 
     Именно этот набор требует ISO 532-2 / модель Мура-Гласберга: 28 полос
