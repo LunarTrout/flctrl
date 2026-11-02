@@ -28,6 +28,17 @@ TCP = ("127.0.0.1", 9787)
 OUT = os.path.join(HERE, "_cache", "tracks")
 
 
+def _frac(seconds: float) -> float:
+    """Перевести секунды в долю песни (0..1) — в этом виде FL ждёт позицию."""
+    try:
+        length = float(call("transport.getSongLength(1)"))
+    except Exception:
+        length = 0.0
+    if length <= 0:
+        return 0.0
+    return max(0.0, min(0.999, float(seconds) / length))
+
+
 def call(expr: str, timeout: int = 30):
     s = socket.create_connection(TCP, timeout=timeout)
     s.sendall((json.dumps({"op": "call", "cmd": "exec", "params": {"expr": expr}}) + "\n").encode())
@@ -80,7 +91,7 @@ def grab(track: int, seconds: float, start: float, fs: int = 48000) -> str:
     os.makedirs(OUT, exist_ok=True)
     solo_only(track)
     time.sleep(0.3)
-    call("transport.setSongPos(%r)" % start)
+    call("transport.setSongPos(%r)" % _frac(start))
     call("transport.start()")
     time.sleep(0.4)
     audio = capture(seconds, fs)
@@ -106,7 +117,7 @@ def grab_any(seconds: float, start: float, track: int | None = None, fs: int = 4
     if track is not None:
         solo_only(track)
         time.sleep(0.2)
-    call("transport.setSongPos(%r)" % start)
+    call("transport.setSongPos(%r)" % _frac(start))
     call("transport.start()")
     time.sleep(0.25)
     audio = capture(seconds, fs)

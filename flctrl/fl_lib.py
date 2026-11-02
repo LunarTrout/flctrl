@@ -62,6 +62,38 @@ def _parse(value):
     return r
 
 
+def _hear_python() -> str:
+    """Найти интерпретатор со phonometry: env, затем несколько типовых мест."""
+    env = os.environ.get("FLCTRL_PY_HEAR")
+    if env and os.path.exists(env):
+        return env
+    roots = [os.path.dirname(HERE), HERE, os.getcwd(),
+             r"C:\Users\%s\mcp\flstudio-mcp" % os.environ.get("USERNAME", "")]
+    for root in roots:
+        for tag in (".venv313", ".venv", "venv"):
+            for sub in ("Scripts\\python.exe", "bin/python"):
+                p = os.path.join(root, tag, sub)
+                if os.path.exists(p):
+                    return p
+    return ""
+
+
+def _hear_cli(cmd: str, *args: str, timeout: int = 900):
+    """Выполнить замер в окружении со phonometry (обычно 3.13)."""
+    import json
+    import subprocess
+    py = _hear_python()
+    cli = os.path.join(HERE, "hear_cli.py")
+    if not (py and os.path.exists(cli)):
+        raise RuntimeError("нет окружения для слуха: нужен python с phonometry "
+                           "(задайте FLCTRL_PY_HEAR)")
+    p = subprocess.run([py, cli, cmd, *args], capture_output=True, text=True, timeout=timeout)
+    txt = (p.stdout or "").strip()
+    if not txt:
+        raise RuntimeError((p.stderr or "")[-300:])
+    return json.loads(txt)
+
+
 # ---------------------------------------------------------------- state
 
 class _Link:
@@ -229,8 +261,21 @@ class _State:
                 out.append({"i": row[0], "name": row[1], "vol": row[2], "pan": row[3]})
         return out
 
-    def plugins(self):
-        return self._live("[list(x) for x in %s]" % q_plugins())
+    def plugins(self, tracks: list | None = None) -> list:
+        """Что стоит в слотах: список {track, slot, name}. По одной дорожке за запрос."""
+        n = int(self._live("mixer.trackCount()"))
+        cand = tracks if tracks is not None else list(range(n))
+        out = []
+        for t in cand:
+            expr = ("[(s, str(plugins.getPluginName(%d, s))) for s in range(10) "
+                    "if plugins.isValid(%d, s)]" % (t, t))
+            try:
+                rows = _parse(self._live(expr))
+            except Exception:
+                continue
+            for slot, name in rows:
+                out.append({"track": int(t), "slot": int(slot), "name": name})
+        return out
 
     def tempo(self):
         import q
@@ -336,7 +381,11 @@ class _Hear:
 
     def measure(self, path: str, a: float | None = None, b: float | None = None,
                 stem: str | None = None):
-        import listen_layer as L
+        """Замер. Если phonometry нет в этом интерпретаторе — уходим в 3.13."""
+        try:
+            import listen_layer as L
+        except ModuleNotFoundError:
+            return _hear_cli("measure", path, "--a", str(a or 0.0), "--b", str(b or 30.0))
         sec = (a, b) if a is not None and b is not None else None
         return L.measure(path, section=sec, stem_path=stem)
 
