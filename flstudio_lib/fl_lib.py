@@ -552,7 +552,60 @@ class _Predict:
 
 
 class _Create:
-    """Создание объектов. Плагин — через файл, затем перечитывание."""
+    """Создание объектов. Живые операции — через Frida, без перезагрузки."""
+
+    LIVE = "fl_live_insert.py"
+    PORT = 9790
+
+    def _py312(self) -> str:
+        return os.path.join(os.path.dirname(HERE), ".venv312", "Scripts", "python.exe")
+
+    def _live_run(self, argv: list, port: int | None = None, timeout: int = 240) -> dict:
+        """Выполнить живую операцию через стенд fl_live_insert."""
+        import json
+        import subprocess
+        tool = os.path.join(HERE, self.LIVE)
+        cmd = [self._py312(), tool] + [str(a) for a in argv] + ["--port", str(port or self.PORT)]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        txt = p.stdout or ""
+        res = None
+        for line in reversed(txt.splitlines()):
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    res = json.loads(line)
+                    break
+                except Exception:
+                    continue
+        return {"ok": p.returncode == 0, "result": res,
+                "raw": txt[-600:], "err": (p.stderr or "")[-300:]}
+
+    def live_start(self, flp: str, port: int | None = None) -> dict:
+        """Поднять стенд: FL с проектом под Frida. Дальше живые операции идут через него."""
+        import subprocess
+        tool = os.path.join(HERE, self.LIVE)
+        cmd = [self._py312(), tool, "daemon", "--flp", flp,
+               "--port", str(port or self.PORT)]
+        flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | NEW_PROCESS_GROUP
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=flags, close_fds=True)
+        return {"started": True, "port": port or self.PORT, "flp": flp}
+
+    def live_insert(self, track: int, slot: int, plugin: str, port: int | None = None) -> dict:
+        """Поставить плагин в слот вживую (имя из базы FL или путь к .dll)."""
+        return self._live_run(["insert", track, slot, plugin], port)
+
+    def live_delete(self, track: int, slot: int, port: int | None = None) -> dict:
+        """Освободить слот вживую (родная функция движка, DLL выгружается)."""
+        return self._live_run(["delete", track, slot], port)
+
+    def live_replace(self, track: int, slot: int, plugin: str, port: int | None = None) -> dict:
+        """Сменить плагин в слоте вживую (выгрузить и поставить другой)."""
+        return self._live_run(["replace", track, slot, plugin], port)
+
+    def live_slots(self, track: int, port: int | None = None) -> dict:
+        """Карта слотов инсерта прямо из памяти."""
+        return self._live_run(["slots", "--track", track], port)
 
     def render(self, flp: str, timeout_s: int = 900, fmt: str = "wav") -> str:
         """Отрисовать проект через CLI FL (FL должен быть закрыт).
