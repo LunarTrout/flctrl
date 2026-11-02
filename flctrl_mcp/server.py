@@ -346,6 +346,49 @@ def fl_sections(path: str) -> dict:
 
 
 @tool
+def fl_audit(mine: str, refs: list[str], a: float | None = None,
+             b: float | None = None) -> dict:
+    """Аудит микса против коридора референсов по всем измеримым фронтам.
+
+    Возвращает вердикты по динамике, спектру, стерео, шуму, атакам, клиппингу
+    и отдельно группу «мастеринг» (уровень и пик — это ступень обработки,
+    а не качество).
+    """
+    return fl.hear.audit(mine, refs, a, b)
+
+
+@tool
+def fl_sections_compare(mine: str, refs: list[str], a: float | None = None,
+                        b: float | None = None) -> dict:
+    """Сравнить наши секции с самыми похожими участками референсов.
+
+    Сравнение идёт по форме спектра, а не по времени: вступление с вступлением,
+    кульминация с кульминацией.
+    """
+    return fl.hear.sections_compare(mine, refs, a, b)
+
+
+@tool
+def fl_pan(stems: dict, a: float | None = None, b: float | None = None) -> dict:
+    """Карта панорамы: позиция роли по полосам и секциям, статичность,
+    спектральное перекрытие ролей и подсказки, выведенные из измерений."""
+    return fl.hear.pan(stems, a, b)
+
+
+@tool
+def fl_report(mine: str, refs: list[str] | None = None,
+              stems: dict | None = None, a: float | None = None,
+              b: float | None = None, impulse: str | None = None,
+              sine: str | None = None, ducked: str | None = None) -> dict:
+    """Полный отчёт одним вызовом: реестр проверок, покрытие, действия, markdown.
+
+    Пропущенные проверки не исчезают — они перечислены с причиной, поэтому
+    «забыл посмотреть» видно в самом отчёте.
+    """
+    return fl.hear.report(mine, refs, stems, a, b, impulse, sine, ducked)
+
+
+@tool
 def fl_masking(mix_path: str, stems: dict | None = None) -> dict:
     """Кто кого забивает: маскировка по полосам между стемами."""
     return hear("masking", mix_path, json.dumps(stems or {}))

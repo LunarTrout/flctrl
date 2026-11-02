@@ -120,6 +120,49 @@ def main(argv=None) -> int:
             mix = args[3] if len(args) > 3 else None
             _out(balance.project(mapping, mix))
             return 0
+    if cmd == "audit":
+        import audit
+
+        mine = args[0]
+        refs = json.loads(open(args[1], encoding="utf-8").read()) if len(args) > 1 else []
+        a = float(args[args.index("--a") + 1]) if "--a" in args else None
+        b = float(args[args.index("--b") + 1]) if "--b" in args else None
+        m = audit.measure(mine, a, b)
+        rs = [audit.measure(r, a, b) for r in refs]
+        _out(audit.audit(m, rs))
+        return 0
+    if cmd == "seccomp":
+        import seccomp
+
+        mine = args[0]
+        refs = json.loads(open(args[1], encoding="utf-8").read()) if len(args) > 1 else []
+        a = float(args[args.index("--a") + 1]) if "--a" in args else None
+        b = float(args[args.index("--b") + 1]) if "--b" in args else None
+        _out(seccomp.compare(mine, refs, a, b))
+        return 0
+    if cmd == "pan":
+        import pan as pan_mod
+
+        stems = json.loads(open(args[0], encoding="utf-8").read()) if args else {}
+        a = float(args[args.index("--a") + 1]) if "--a" in args else None
+        b = float(args[args.index("--b") + 1]) if "--b" in args else None
+        m = pan_mod.analyze(stems, a, b)
+        _out({"map": m, "advice": pan_mod.advice(m)})
+        return 0
+    if cmd == "report":
+        import report as rep
+
+        mine = args[0]
+        payload = json.loads(open(args[1], encoding="utf-8").read()) if len(args) > 1 else {}
+        a = payload.get("a")
+        b = payload.get("b")
+        res = rep.build(mine, payload.get("refs"), a, b, payload.get("stems"),
+                        payload.get("impulse"), payload.get("sine"), payload.get("ducked"))
+        _out({"markdown": rep.to_markdown(res),
+              "coverage": res["coverage"]["coverage"],
+              "actions": res["actions"],
+              "skipped": res["coverage"]["skipped"]})
+        return 0
     if cmd == "describe":
         import fl_lib as fl
         _out(fl.hear.describe(args[0]))

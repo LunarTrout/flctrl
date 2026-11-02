@@ -493,6 +493,74 @@ class _Hear:
             except OSError:
                 pass
 
+    def audit(self, mine: str, refs: list[str], a: float | None = None,
+              b: float | None = None) -> dict:
+        """Аудит микса против коридора референсов по всем фронтам."""
+        import json as _json
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            _json.dump(refs, f, ensure_ascii=False)
+            path = f.name
+        args = [mine, path]
+        if a is not None and b is not None:
+            args += ["--a", str(a), "--b", str(b)]
+        try:
+            return _hear_cli("audit", *args, timeout=3600)
+        finally:
+            os.unlink(path)
+
+    def sections_compare(self, mine: str, refs: list[str], a: float | None = None,
+                         b: float | None = None) -> dict:
+        """Сопоставить наши секции с самыми похожими участками референсов."""
+        import json as _json
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            _json.dump(refs, f, ensure_ascii=False)
+            path = f.name
+        args = [mine, path]
+        if a is not None and b is not None:
+            args += ["--a", str(a), "--b", str(b)]
+        try:
+            return _hear_cli("seccomp", *args, timeout=3600)
+        finally:
+            os.unlink(path)
+
+    def pan(self, stems: dict, a: float | None = None, b: float | None = None) -> dict:
+        """Карта панорамы по полосам/секциям и подсказки на измерениях."""
+        import json as _json
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            _json.dump(stems, f, ensure_ascii=False)
+            path = f.name
+        args = [path]
+        if a is not None and b is not None:
+            args += ["--a", str(a), "--b", str(b)]
+        try:
+            return _hear_cli("pan", *args, timeout=3600)
+        finally:
+            os.unlink(path)
+
+    def report(self, mine: str, refs: list[str] | None = None,
+               stems: dict | None = None, a: float | None = None,
+               b: float | None = None, impulse: str | None = None,
+               sine: str | None = None, ducked: str | None = None) -> dict:
+        """Полный отчёт одним вызовом: покрытие проверок, действия, markdown."""
+        import json as _json
+        import tempfile
+        payload = {"refs": refs, "stems": stems, "a": a, "b": b,
+                   "impulse": impulse, "sine": sine, "ducked": ducked}
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            _json.dump(payload, f, ensure_ascii=False)
+            path = f.name
+        try:
+            return _hear_cli("report", mine, path, timeout=3600)
+        finally:
+            os.unlink(path)
+
     def psycho(self, path: str, a: float | None = None, b: float | None = None):
         """Шероховатость, тональность, флуктуация (ECMA-418-2)."""
         args = [path]
