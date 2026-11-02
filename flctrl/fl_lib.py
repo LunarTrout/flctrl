@@ -410,13 +410,24 @@ class _Hear:
 
     def measure(self, path: str, a: float | None = None, b: float | None = None,
                 stem: str | None = None):
-        """Замер. Если phonometry нет в этом интерпретаторе — уходим в 3.13."""
+        """Замер. Если phonometry нет в этом интерпретаторе — уходим в 3.13.
+
+        Если окно попало в тишину, в ответе появляется `warning`: иначе нули
+        легко принять за «инструмент пропал» вместо «здесь его нет».
+        """
         try:
             import listen_layer as L
         except ModuleNotFoundError:
-            return _hear_cli("measure", path, "--a", str(a or 0.0), "--b", str(b or 30.0))
-        sec = (a, b) if a is not None and b is not None else None
-        return L.measure(path, section=sec, stem_path=stem)
+            res = _hear_cli("measure", path, "--a", str(a or 0.0), "--b", str(b or 30.0))
+        else:
+            sec = (a, b) if a is not None and b is not None else None
+            res = L.measure(path, section=sec, stem_path=stem)
+        try:
+            if float(res.get("N_mean", 1.0)) < 1.0:
+                res["warning"] = "окно в тишине: N ≈ 0, цифрам по форме верить нельзя"
+        except Exception:
+            pass
+        return res
 
     def curve(self, path: str, a: float | None = None, b: float | None = None):
         args = [path]
