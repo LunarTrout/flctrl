@@ -580,31 +580,67 @@ class _Create:
         return {"ok": p.returncode == 0, "result": res,
                 "raw": txt[-600:], "err": (p.stderr or "")[-300:]}
 
+    _LIVE = None  # (Daemon, port, flp) — стенд, поднятый в этом же процессе
+
+    def _live_op(self, op: str, **kw) -> dict:
+        """Операция через живой стенд текущего процесса (без подпроцесса)."""
+        dm, port, _flp = self._LIVE
+        r = dm.run_op(dict(op=op, **kw))
+        return {"ok": bool(r.get("ok")), "result": r.get("data"),
+                "err": r.get("error", ""), "port": port}
+
     def live_start(self, flp: str, port: int | None = None) -> dict:
-        """Поднять стенд: FL с проектом под Frida. Дальше живые операции идут через него."""
-        import subprocess
-        tool = os.path.join(HERE, self.LIVE)
-        cmd = [self._py312(), tool, "daemon", "--flp", flp,
-               "--port", str(port or self.PORT)]
-        flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | NEW_PROCESS_GROUP
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         creationflags=flags, close_fds=True)
-        return {"started": True, "port": port or self.PORT, "flp": flp}
+        """Поднять FL под Frida в этом процессе. Требует frida (окружение 3.12)."""
+        try:
+            import live_create
+        except ImportError:
+            import fl_live_insert as live_create
+        port = port or self.PORT
+        dm = live_create.Daemon(flp, port)
+        dm.start()
+        _Create._LIVE = (dm, port, flp)
+        return {"started": True, "pid": dm.pid, "port": port, "flp": flp}
+
+    def live_stop(self) -> dict:
+        """Закрыть стенд: отсоединиться от Frida и убрать FL."""
+        if not self._LIVE:
+            return {"stopped": False, "reason": "стенд не поднят"}
+        dm = self._LIVE[0]
+        try:
+            dm.closing = True
+            dm.session.detach()
+        except Exception:
+            pass
+        try:
+            import safe_fl
+            safe_fl.kill_all()
+        except Exception:
+            pass
+        _Create._LIVE = None
+        return {"stopped": True}
 
     def live_insert(self, track: int, slot: int, plugin: str, port: int | None = None) -> dict:
         """Поставить плагин в слот вживую (имя из базы FL или путь к .dll)."""
+        if self._LIVE:
+            return self._live_op("insert", track=track, slot=slot, plugin=plugin)
         return self._live_run(["insert", track, slot, plugin], port)
 
     def live_delete(self, track: int, slot: int, port: int | None = None) -> dict:
         """Освободить слот вживую (родная функция движка, DLL выгружается)."""
+        if self._LIVE:
+            return self._live_op("delete", track=track, slot=slot)
         return self._live_run(["delete", track, slot], port)
 
     def live_replace(self, track: int, slot: int, plugin: str, port: int | None = None) -> dict:
         """Сменить плагин в слоте вживую (выгрузить и поставить другой)."""
+        if self._LIVE:
+            return self._live_op("replace", track=track, slot=slot, plugin=plugin)
         return self._live_run(["replace", track, slot, plugin], port)
 
     def live_slots(self, track: int, port: int | None = None) -> dict:
         """Карта слотов инсерта прямо из памяти."""
+        if self._LIVE:
+            return self._live_op("slots", track=track)
         return self._live_run(["slots", "--track", track], port)
 
     def render(self, flp: str, timeout_s: int = 900, fmt: str = "wav") -> str:
