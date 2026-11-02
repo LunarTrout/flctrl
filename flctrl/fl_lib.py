@@ -216,11 +216,14 @@ class _State:
         for a in range(0, n, chunk):
             expr = ("[(i, str(mixer.getTrackName(i)), round(mixer.getTrackVolume(i), 2), "
                     "round(mixer.getTrackPan(i), 2), sum(1 for s in range(10) "
-                    "if plugins.isValid(i, s))) for i in range(%d, %d)]"
+                    "if plugins.isValid(i, s)), int(bool(mixer.isTrackMuted(i))), "
+                    "int(bool(mixer.isTrackSolo(i)))) for i in range(%d, %d)]"
                     % (a, min(a + chunk, n)))
             for row in _parse(self._live(expr)):
                 out.append({"i": row[0], "name": row[1], "vol": row[2],
-                            "pan": row[3], "fx": row[4]})
+                            "pan": row[3], "fx": row[4],
+                            "mute": row[5] if len(row) > 5 else None,
+                            "solo": row[6] if len(row) > 6 else None})
         return out
 
     def routing(self, track: int, dests: list | None = None) -> list:
