@@ -1,0 +1,13 @@
+# Слой слуха и файловый разбор — Python 3.13
+phonometry>=0.1
+soundfile>=0.12
+numpy>=1.26
+scipy>=1.11
+pyloudnorm>=0.1
+pystoi>=0.4
+pedalboard>=0.9     # песочница с настоящими VST3
+
+# Файловый разбор и живой мост — Python 3.12
+# sounddevice>=0.5
+# pyflp @ git+https://github.com/stemhub-org/PyFLP_v2.git@dev
+# frida>=17            # живой контроль (в работе)
