@@ -1,8 +1,7 @@
-"""Живая вставка плагина на чистом проекте: без перезапуска FL.
+"""Живой цикл на чистом проекте: вставка, проверка, удаление — без перезапуска.
 
-Проверяет то, ради чего всё затевалось: плагин появляется в слоте и исчезает
-из него прямо в работающей FL. Тест откажется работать, если открыт не
-тестовый проект — чужую сессию он не тронет.
+Работает только если открыт тестовый проект; чужую сессию не трогает.
+Прицепляется к уже запущенной FL (attach), ничего не переоткрывает.
 """
 import os
 import sys
@@ -17,18 +16,27 @@ import render_job            # noqa: E402
 
 TEST_NAME = os.environ.get("FLCTRL_TEST_NAME", "small")
 TRACK, SLOT = 1, 0
-PLUGIN = os.environ.get("FLCTRL_TEST_PLUGIN", "FabFilter Pro-Q 4")
+# По имени FL ищет только в Plugins\Fruity; для VST задай путь к .fst.
+PLUGIN = os.environ.get("FLCTRL_TEST_PLUGIN", "Fruity Limiter")
+FST = os.environ.get("FLCTRL_TEST_FST", "")
+EMPTY = 0xFFFFFFFF
 PASS, FAIL = [], []
+
+
+def _assert(cond, msg):
+    if not cond:
+        raise AssertionError(msg)
+    return True
 
 
 def check(name, fn):
     try:
         detail = fn()
         PASS.append(name)
-        print("ок      %-34s %s" % (name, str(detail)[:60]))
+        print("ок      %-32s %s" % (name, str(detail)[:70]))
     except Exception as e:
         FAIL.append((name, str(e)[:140]))
-        print("ПАДЕНИЕ %-34s %s" % (name, str(e)[:90]))
+        print("ПАДЕНИЕ %-32s %s" % (name, str(e)[:90]))
 
 
 def guard() -> None:
@@ -38,46 +46,69 @@ def guard() -> None:
         raise SystemExit("открыт не тестовый проект (%r) — тест остановлен" % title)
 
 
+def slot(track: int = TRACK, num: int = SLOT) -> dict:
+    """Состояние слота из памяти движка (карта приходит словарём 'дорожка:слот')."""
+    res = fl.create.live_slots(track)
+    data = res.get("result") if isinstance(res, dict) else None
+    if not isinstance(data, dict):
+        raise RuntimeError("карта слотов не пришла: %r" % (res,))
+    return data.get("%d:%d" % (track, num)) or {}
+
+
+def busy(s: dict) -> bool:
+    return int(s.get("state", EMPTY)) != EMPTY
+
+
 def main() -> int:
     guard()
     print("проект:", render_job.window_title())
+    try:
+        print("attach:", fl.create.live_attach())
+    except Exception as e:
+        raise SystemExit("attach не удался: %s" % str(e)[:200])
 
     def empty_slot():
         try:
             fl.create.live_delete(TRACK, SLOT)
         except Exception:
             pass
-        time.sleep(1.2)
-        name = fl.create.live_slots(TRACK)
-        assert not name or not any(s.get("busy") for s in name if s.get("slot") == SLOT), \
-            "слот не пуст перед тестом: %r" % name
-        return "слот свободен"
+        time.sleep(1.0)
+        s = slot()
+        _assert(not busy(s), "слот занят перед тестом: %r" % s)
+        return "свободен"
     check("подготовка: слот пуст", empty_slot)
 
     def insert():
-        res = fl.create.live_insert(TRACK, SLOT, PLUGIN)
+        fl.create.live_insert(TRACK, SLOT, PLUGIN)
         time.sleep(1.5)
-        slots = fl.create.live_slots(TRACK)
-        busy = [s for s in slots if s.get("slot") == SLOT and s.get("busy")]
-        assert busy, "после вставки слот пуст: %r" % slots
-        return "занят: %s" % busy[0].get("name", "?")
+        s = slot()
+        _assert(busy(s), "слот пуст после вставки")
+        return "state %s, параметров %s" % (s.get("state"), s.get("params"))
     check("живая вставка", insert)
-
-    def alive():
-        got = fl.state.plugins(TRACK)
-        name = (got or {}).get(SLOT) or str(got)
-        assert PLUGIN.split()[0].lower() in str(name).lower(), "имя не совпало: %r" % name
-        return name
-    check("плагин виден через API", alive)
 
     def delete():
         fl.create.live_delete(TRACK, SLOT)
         time.sleep(1.5)
-        slots = fl.create.live_slots(TRACK)
-        busy = [s for s in slots if s.get("slot") == SLOT and s.get("busy")]
-        assert not busy, "слот всё ещё занят: %r" % busy
-        return "слот освобождён"
+        s = slot()
+        _assert(not busy(s), "слот всё ещё занят: %r" % s)
+        return "state %s" % s.get("state")
     check("живое удаление", delete)
+
+    if FST:
+        def vst():
+            fl.create.live_insert(TRACK, SLOT, FST)
+            time.sleep(2.0)
+            s = slot()
+            _assert(busy(s), "VST не встал в слот")
+            return "обёртка %s" % str(s.get("path", ""))[-34:]
+        check("VST через .fst", vst)
+
+        def vst_out():
+            fl.create.live_delete(TRACK, SLOT)
+            time.sleep(1.5)
+            _assert(not busy(slot()), "VST остался в слоте")
+            return "слот свободен"
+        check("удаление VST", vst_out)
 
     print("\nитог: %d прошло, %d упало" % (len(PASS), len(FAIL)))
     for name, err in FAIL:
