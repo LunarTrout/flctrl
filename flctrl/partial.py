@@ -29,6 +29,20 @@ import perceptual as P
 REGIONS = P.REGIONS
 FLOOR_DB = -60.0
 
+# Границы областей в герцах — для моделей, которые работают не в Bark (MG/ERB).
+FREQ_REGIONS = (
+    ("sub", 0.0, 60.0),
+    ("bass", 60.0, 250.0),
+    ("lowmid", 250.0, 560.0),
+    ("mid", 560.0, 1278.0),
+    ("upmid", 1278.0, 3000.0),
+    ("pres", 3000.0, 6000.0),
+    ("air", 6000.0, 30000.0),
+)
+TC = np.array([25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400,
+               500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000,
+               6300, 8000, 10000, 12500, 16000], dtype=float)  # 29 полос ISO
+
 
 def _read(path: str, a: float | None, b: float | None):
     import soundfile as sf
@@ -55,15 +69,148 @@ def bands(x: np.ndarray, fs: int, hop_s: float = 0.10):
     return lv, t
 
 
+def bands29(x: np.ndarray, fs: int, hop_s: float = 0.10) -> tuple[np.ndarray, np.ndarray]:
+    """Покадровые уровни 29 третьоктавных полос (25 Гц…16 кГц), dB SPL.
+
+    Именно этот набор требует ISO 532-2 / модель Мура-Гласберга: 28 полос
+    perceptual.py туда не подходят (phonometry отвергает форму не (T,29)).
+    """
+    from scipy.signal import butter, sosfilt
+
+    if x.ndim == 2:
+        x = x.mean(axis=1)
+    hop = max(1, int(round(hop_s * fs)))
+    n = len(x)
+    out = np.empty((max(1, 1 + (n - hop) // hop), len(TC)))
+    for j, fc in enumerate(TC):
+        lo = fc / 2 ** (1 / 6)
+        hi = fc * 2 ** (1 / 6)
+        nyq = fs / 2 * 0.99
+        if lo >= nyq:                      # полоса выше Найквиста — её просто нет
+            out[:, j] = 1e-30
+            continue
+        sos = butter(4, [max(lo, 10.0), min(hi, nyq)],
+                     btype="bandpass", fs=fs, output="sos")
+        y = sosfilt(sos, x)
+        frames = 1 + (len(y) - hop) // hop
+        z = y[:frames * hop].reshape(frames, hop)
+        out[:frames, j] = (z ** 2).mean(axis=1)
+    out = 10 * np.log10(np.maximum(out, 1e-30) / (20e-6) ** 2)
+    t = np.arange(out.shape[0]) * hop_s
+    return out, t
+
+
+def mg_series(lv29: np.ndarray):
+    """Громкость по ISO 532-2 (Мур-Гласберг): N по кадрам и специфическая (T,372)."""
+    from phonometry import psychoacoustics as psy
+
+    lv29 = np.atleast_2d(lv29)
+    N = np.empty(len(lv29))
+    spec = None
+    for i, row in enumerate(lv29):
+        r = psy.loudness_moore_glasberg_from_third_octave(row)
+        N[i] = r.loudness
+        s = np.asarray(r.specific, dtype=float)
+        if spec is None:
+            spec = np.empty((len(lv29), len(s)))
+        spec[i] = s
+        if i == 0:
+            centre = np.asarray(r.centre_frequencies, dtype=float)
+    return N, spec, centre
+
+
+def _region_masks(centre: np.ndarray) -> dict[str, np.ndarray]:
+    return {name: (centre >= lo) & (centre < hi) for name, lo, hi in FREQ_REGIONS}
+
+
 def _n_series(lv: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """N по кадрам и специфическая громкость (T,240)."""
     N, _phon, spec, _sharp = P.zwicker_series(lv)
     return N, spec
 
 
+def attribute_mg(mix_path: str, stems: dict[str, str], a: float | None = None,
+                 b: float | None = None, level_spl: float = 90.0) -> dict:
+    """То же, что attribute(), но на модели ISO 532-2 (Мур-Гласберг).
+
+    Разница принципиальная: Zwicker считает громкость по 240 полосам Bark,
+    MG — по 372 ERB-полосам с другим правилом суммирования. Для решений
+    «сколько слышно» важна именно вторая: она стандартизована (ISO 532-2) и
+    даёт по-полосную специфическую громкость, по которой видно, ГДЕ источник
+    пропадает.
+    """
+    mix, fs = _read(mix_path, a, b)
+    n = len(mix)
+    lv_mix_raw, t = bands29(mix, fs)
+
+    tot = 10 * np.log10(np.sum(10 ** (lv_mix_raw / 10), axis=1, keepdims=True) + 1e-30)
+    offset = level_spl - float(np.median(tot))
+    lv_mix = lv_mix_raw + offset
+    p_mix = 10 ** (lv_mix / 10)
+
+    N_mix, spec_mix, centre = mg_series(lv_mix)
+    masks = _region_masks(centre)
+
+    out: dict = {"model": "iso532-2", "dur": float(t[-1] - t[0] + 0.1) if len(t) else 0.0,
+                 "level_spl": level_spl, "stems": {}}
+
+    for name, path in stems.items():
+        x, fs_s = _read(path, a, b)
+        if fs_s != fs:
+            raise ValueError("стем %s c другой частотой: %d vs %d" % (name, fs_s, fs))
+        x = _align(x, n)
+        lv_raw, _ = bands29(x, fs)
+        lv = lv_raw + offset
+        p = 10 ** (lv / 10)
+
+        N_solo, spec_solo, _ = mg_series(lv)
+        p_rest = np.maximum(p_mix - p, 10 ** (FLOOR_DB / 10))
+        N_rest, spec_rest, _ = mg_series(10 * np.log10(p_rest))
+        N_partial = np.maximum(N_mix - N_rest, 0.0)
+
+        p_plus = p_mix + p * (10 ** 0.1 - 1.0)
+        N_plus, _, _ = mg_series(10 * np.log10(p_plus))
+        dN = float(np.mean(N_plus - N_mix))
+
+        regions = {}
+        for rname, mask in masks.items():
+            solo_r = spec_solo[:, mask].sum(axis=1)
+            part_r = np.maximum(spec_mix[:, mask].sum(axis=1) - spec_rest[:, mask].sum(axis=1), 0.0)
+            denom = float(np.mean(solo_r))
+            regions[rname] = {
+                "A": float(np.clip(np.mean(part_r) / denom, 0, 1)) if denom > 1e-9 else 0.0,
+                "solo": denom,
+                "partial": float(np.mean(part_r)),
+            }
+
+        mean_partial = float(np.mean(N_partial))
+        mean_solo = float(np.mean(N_solo))
+        out["stems"][name] = {
+            "N_solo": mean_solo,
+            "N_partial": mean_partial,
+            "audib": float(np.clip(mean_partial / mean_solo, 0.0, 1.0)) if mean_solo > 1e-9 else 0.0,
+            "audib_p10": float(np.clip(np.percentile(
+                N_partial / np.maximum(N_solo, 1e-9), 10), 0, 1)),
+            "dN_per_db": dN,
+            "regions": regions,
+        }
+
+    total = sum(v["N_partial"] for v in out["stems"].values()) or 1e-9
+    for v in out["stems"].values():
+        v["share_pct"] = 100.0 * v["N_partial"] / total
+    return out
+
+
 def attribute(mix_path: str, stems: dict[str, str], a: float | None = None,
-              b: float | None = None, level_spl: float = 90.0) -> dict:
-    """Главная функция: частичная громкость и слышимость каждого стема."""
+              b: float | None = None, level_spl: float = 90.0,
+              model: str = "mg") -> dict:
+    """Главная функция: частичная громкость и слышимость каждого стема.
+
+    model="mg" (по умолчанию) — ISO 532-2, по-полосная специфическая громкость.
+    model="zwicker" — прежний путь на 240 полосах Bark (для сверки).
+    """
+    if model in ("mg", "iso532-2", "moore"):
+        return attribute_mg(mix_path, stems, a, b, level_spl)
     mix, fs = _read(mix_path, a, b)
     n = len(mix)
     lv_mix_raw, t = bands(mix, fs)
