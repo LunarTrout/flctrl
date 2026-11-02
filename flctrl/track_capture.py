@@ -39,6 +39,77 @@ def _frac(seconds: float) -> float:
     return max(0.0, min(0.999, float(seconds) / length))
 
 
+def _hint() -> str:
+    return str(call("transport.getSongPosHint()"))
+
+
+def _bar() -> int:
+    """Текущий такт из подсказки FL (формат «такт:доля:тик»)."""
+    import re
+    try:
+        m = re.search(r"(\d+)\s*:", str(_hint()))
+        return int(m.group(1)) if m else 0
+    except Exception:
+        return 0
+
+
+def total_bars() -> int:
+    """Сколько всего тактов: позиция в FL задаётся долей от них.
+
+    FL отдаёт номер такта только в подсказке и не сразу после перемотки,
+    поэтому после установки позиции ждём и, если номер не пришёл, пробуем
+    конец песни.
+    """
+    import time as _t
+    here = float(call("transport.getSongPos()"))
+    total = 1
+    for probe in (0.5, 0.999):
+        call("transport.setSongPos(%r)" % probe)
+        _t.sleep(0.25)
+        bar = _bar()
+        if bar > 1:
+            total = int(round((bar - 1) / probe)) + 1
+            break
+    call("transport.setSongPos(%r)" % here)
+    return max(1, total)
+
+
+def seek_bar(bar: int, tol: int = 1) -> dict:
+    """Перевести плейхед на такт N и проверить попадание."""
+    total = total_bars()
+    frac = max(0.0, min(0.999, (bar - 1) / float(max(1, total - 1))))
+    got = 0
+    for _ in range(6):
+        call("transport.setSongPos(%r)" % frac)
+        got = _bar()
+        if abs(got - bar) <= tol:
+            break
+        frac = max(0.0, min(0.999, frac + (bar - got) / float(max(1, total - 1))))
+    return {"asked_bar": bar, "bar": got, "fraction": round(frac, 4), "total_bars": total}
+
+
+def seek_seconds(seconds: float, tol: float = 0.0015) -> float:
+    """Поставить плейхед примерно на секунду N (доля песни).
+
+    Точное попадание в секунду невозможно: FL задаёт позицию долей от тактов,
+    а при смене темпа связь «секунды ↔ такты» нелинейна. Для точной работы
+    используй seek_bar — такт это родная единица FL.
+    """
+    length = float(call("transport.getSongLength(1)"))
+    if length <= 0:
+        return 0.0
+    target = max(0.0, min(0.999, float(seconds) / length))
+    frac = target
+    for _ in range(5):
+        call("transport.setSongPos(%r)" % frac)
+        pos = float(call("transport.getSongPos()"))
+        err = target - pos
+        if abs(err) <= tol:
+            break
+        frac = max(0.0, min(0.999, frac + err))
+    return frac
+
+
 def call(expr: str, timeout: int = 30):
     s = socket.create_connection(TCP, timeout=timeout)
     s.sendall((json.dumps({"op": "call", "cmd": "exec", "params": {"expr": expr}}) + "\n").encode())

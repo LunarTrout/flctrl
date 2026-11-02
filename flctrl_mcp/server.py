@@ -144,13 +144,19 @@ def fl_guide() -> str:
 
 
 @tool
-def fl_seek(seconds: float) -> dict:
-    """Перевести плейхед на секунду N. Внутри переводит в долю песни (FL ждёт 0..1)."""
+def fl_seek_bar(bar: int) -> dict:
+    """Перевести плейхед на такт N (родная единица FL) и проверить попадание."""
     import track_capture as T
-    frac = T._frac(seconds)
-    T.call("transport.setSongPos(%r)" % frac)
-    return {"asked_s": seconds, "fraction": round(frac, 4),
-            "now_fraction": round(float(T.call("transport.getSongPos()")), 4)}
+    return T.seek_bar(bar)
+
+
+@tool
+def fl_seek(seconds: float) -> dict:
+    """Перемотка по секундам — ПРИБЛИЗИТЕЛЬНО. Точнее fl_seek_bar: FL считает такты."""
+    import track_capture as T
+    frac = T.seek_seconds(seconds)
+    return {"asked_s": seconds, "fraction": round(frac, 4), "hint": T._hint(),
+            "note": "при смене темпа секунды нелинейны — для точной работы fl_seek_bar"}
 
 
 @tool
