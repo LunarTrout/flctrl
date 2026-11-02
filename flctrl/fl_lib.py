@@ -1037,26 +1037,43 @@ class _Create:
         _Create._LIVE = None
         return {"stopped": True}
 
+    def _ensure_stand(self, port: int | None = None) -> None:
+        """Гарантировать живой стенд, не убивая открытую FL.
+
+        Если FL уже запущена (человек открыл проект сам) — цепляемся к ней.
+        Спавн (со своим тестовым проектом) остаётся только на случай, когда
+        FL не запущена вовсе: иначе стенд закроет чужую сессию.
+        """
+        if self._LIVE:
+            return
+        import render_job
+        if render_job.fl_running():
+            self.live_attach(port=port)
+
     def live_insert(self, track: int, slot: int, plugin: str, port: int | None = None) -> dict:
         """Поставить плагин в слот вживую (имя из базы FL или путь к .dll)."""
+        self._ensure_stand(port)
         if self._LIVE:
             return self._live_op("insert", track=track, slot=slot, plugin=plugin)
         return self._live_run(["insert", track, slot, plugin], port)
 
     def live_delete(self, track: int, slot: int, port: int | None = None) -> dict:
         """Освободить слот вживую (родная функция движка, DLL выгружается)."""
+        self._ensure_stand(port)
         if self._LIVE:
             return self._live_op("delete", track=track, slot=slot)
         return self._live_run(["delete", track, slot], port)
 
     def live_replace(self, track: int, slot: int, plugin: str, port: int | None = None) -> dict:
         """Сменить плагин в слоте вживую (выгрузить и поставить другой)."""
+        self._ensure_stand(port)
         if self._LIVE:
             return self._live_op("replace", track=track, slot=slot, plugin=plugin)
         return self._live_run(["replace", track, slot, plugin], port)
 
     def live_slots(self, track: int, port: int | None = None) -> dict:
         """Карта слотов инсерта прямо из памяти."""
+        self._ensure_stand(port)
         if self._LIVE:
             return self._live_op("slots", track=track)
         return self._live_run(["slots", "--track", track], port)
@@ -1073,6 +1090,7 @@ class _Create:
         index=N    — явная позиция; count — сколько дорожек сразу.
         Возвращает before/after счётчика движка и mixer.trackCount() из API.
         """
+        self._ensure_stand(port)
         if self._LIVE:
             return self._live_op("trackadd", index=index, count=count, flags=flags)
         argv = ["trackadd"]
@@ -1084,12 +1102,14 @@ class _Create:
     def live_track_delete(self, index: int, flags: int = 0x12,
                           port: int | None = None) -> dict:
         """Удалить дорожку микшера вживую (штатная функция движка, с undo-записью)."""
+        self._ensure_stand(port)
         if self._LIVE:
             return self._live_op("trackdel", index=index, flags=flags)
         return self._live_run(["trackdel", str(index), "--flags", str(flags)], port)
 
     def live_track_count(self, port: int | None = None) -> dict:
         """Число дорожек микшера из памяти движка (для проверки add/delete)."""
+        self._ensure_stand(port)
         if self._LIVE:
             return self._live_op("trackcount")
         return self._live_run(["trackcount"], port)
