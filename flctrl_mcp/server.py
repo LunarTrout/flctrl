@@ -93,6 +93,21 @@ mcp = FastMCP("flctrl", instructions="""FL Studio под управлением 
 5. Перед правкой звука измерь: fl_measure на файле (рендер или запись).
 6. После правки измерь снова и сравни через fl_judge (принимает/отклоняет по числам).
 
+ОЦЕНКА ЗВУКА: РЕЕСТР ПРОВЕРОК
+fl_report — один вызов, который обходит ВЕСЬ реестр проверок и возвращает
+markdown, покрытие и список действий из чисел. Пропущенная проверка не
+исчезает: она печатается с причиной («нет стемов», «нет импульса»). Поэтому
+отчёт всегда полный — сначала смотри fl_report, потом уже отдельные инструменты.
+* fl_audit — фронты против коридора референсов: крест, LDR, резкость, шум,
+  атаки, клиппинг, моно-потеря, полосы спектра и стерео.
+* fl_sections_compare — секции против похожих участков референсов (не по времени).
+* fl_attribute — сколько каждого инструмента реально СЛЫШНО (ISO 532-2):
+  N_partial = N(микс) − N(микс без источника), A = N_partial/N_solo.
+* fl_balance_build / fl_balance_project / fl_balance_solve — жанровая модель
+  баланса: цель как ансамбль k ближайших референсов, правки с капом.
+* fl_pan — панорама: статичность, перекрытие ролей, подсказки из измерений.
+* fl_masking — кто кого забивает по полосам.
+
 ОСОБЕННОСТИ FL, КОТОРЫЕ ЛОМАЮТ «ОЧЕВИДНЫЕ» РЕШЕНИЯ
 * transport.setSongPos принимает ДОЛЮ песни 0..1, не секунды и не биты.
   Длина песни: transport.getSongLength(1). Иначе перемотка молча не работает.
@@ -392,6 +407,37 @@ def fl_report(mine: str, refs: list[str] | None = None,
     «забыл посмотреть» видно в самом отчёте.
     """
     return fl.hear.report(mine, refs, stems, a, b, impulse, sine, ducked)
+
+
+@tool
+def fl_attribute(mix_path: str, stems: dict, a: float | None = None,
+                 b: float | None = None) -> dict:
+    """Сколько каждого инструмента реально СЛЫШНО в миксе (ISO 532-2).
+
+    Частичная громкость `N_partial = N(микс) − N(микс без источника)`,
+    слышимость `A = N_partial / N_solo`, измеренная чувствительность `dN/dB`
+    и по-полосная слышимость. В отличие от доли полос учитывает маскировку.
+    """
+    return fl.hear.attribute(mix_path, stems, a, b)
+
+
+@tool
+def fl_balance_build(refs_dir: str, out: str) -> dict:
+    """Собрать жанровую модель баланса по папкам <трек>/{drums,bass,other,vocals}."""
+    return fl.balance.build(refs_dir, out)
+
+
+@tool
+def fl_balance_project(mapping: dict, mix_path: str | None = None,
+                       a: float | None = None, b: float | None = None) -> dict:
+    """Вектор слышимости проекта по ролям: A, доля, N_partial, dN/dB."""
+    return fl.balance.project(mapping, mix_path, a, b)
+
+
+@tool
+def fl_balance_solve(vec: dict, model: dict, cap_db: float = 6.0) -> dict:
+    """Каким ролям и на сколько дБ двинуть фейдер, с капом и предсказанием."""
+    return fl.balance.solve(vec, model, cap_db)
 
 
 @tool
