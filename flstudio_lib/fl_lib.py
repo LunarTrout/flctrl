@@ -230,6 +230,24 @@ class _Hear:
     def _py312(self) -> str:
         return os.path.join(os.path.dirname(HERE), ".venv312", "Scripts", "python.exe")
 
+    def style(self, path: str, start: float | None = None,
+              dur: float | None = None) -> dict:
+        """Стиль сведения: 2048-мерный эмбеддинг MIXSTYLE."""
+        import subprocess
+        cmd = [self._py312(), os.path.join(HERE, "mixstyle.py"), "embed", path]
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        return {"raw": (out.stdout or "").strip(), "err": (out.stderr or "").strip()[:200]}
+
+    def style_sim(self, a: str, b: str) -> float | None:
+        """Близость стиля сведения двух файлов (не тембра!)."""
+        import subprocess
+        cmd = [self._py312(), os.path.join(HERE, "mixstyle.py"), "sim", a, b]
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        try:
+            return float((out.stdout or "").strip().splitlines()[-1])
+        except Exception:
+            return None
+
     def describe(self, path: str, start: float | None = None,
                  dur: float | None = None) -> dict:
         """Узнавание: размерность и норма эмбеддинга (не измерение!)."""
