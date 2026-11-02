@@ -62,29 +62,14 @@ def _parse(value):
     return r
 
 
-def _hear_python() -> str:
-    """Найти интерпретатор со phonometry: env, затем несколько типовых мест."""
-    env = os.environ.get("FLCTRL_PY_HEAR")
-    if env and os.path.exists(env):
-        return env
-    roots = [os.path.dirname(HERE), HERE, os.getcwd(),
-             r"C:\Users\%s\mcp\flstudio-mcp" % os.environ.get("USERNAME", "")]
-    for root in roots:
-        for tag in (".venv313", ".venv", "venv"):
-            for sub in ("Scripts\\python.exe", "bin/python"):
-                p = os.path.join(root, tag, sub)
-                if os.path.exists(p):
-                    return p
-    return ""
-
-
 def _hear_cli(cmd: str, *args: str, timeout: int = 900):
     """Выполнить замер в окружении со phonometry (обычно 3.13)."""
     import json
     import subprocess
-    py = _hear_python()
+    py = os.environ.get("FLCTRL_PY_HEAR") or os.path.join(
+        os.path.dirname(HERE), ".venv313", "Scripts", "python.exe")
     cli = os.path.join(HERE, "hear_cli.py")
-    if not (py and os.path.exists(cli)):
+    if not (os.path.exists(py) and os.path.exists(cli)):
         raise RuntimeError("нет окружения для слуха: нужен python с phonometry "
                            "(задайте FLCTRL_PY_HEAR)")
     p = subprocess.run([py, cli, cmd, *args], capture_output=True, text=True, timeout=timeout)
@@ -506,20 +491,42 @@ class _Hear:
 
 # ---------------------------------------------------------------- act
 
+_AUTOSAVE = {"on": True}
+
+
 class _Act:
-    """Правки вживую. Возвращают прочитанное после записи значение."""
+    """Правки вживую. Возвращают прочитанное после записи значение.
+
+    После каждой правки проект сохраняется (Ctrl+S через flsave): FL держит
+    изменения только в памяти, и падение процесса стирает всё, что не сохранено.
+    Отключается через fl.safe.autosave(False) — только для серий экспериментов.
+    """
+
+    def _persist(self):
+        if not _AUTOSAVE["on"]:
+            return None
+        try:
+            import flsave
+            return flsave.save()
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:80]}
+
+    def _do(self, expr: str):
+        result = _State._live(expr)
+        self._persist()
+        return result
 
     def volume(self, track: int, value: float):
-        return _State._live("mixer.setTrackVolume(%d, %r)" % (track, value))
+        return self._do("mixer.setTrackVolume(%d, %r)" % (track, value))
 
     def pan(self, track: int, value: float):
-        return _State._live("mixer.setTrackPan(%d, %r)" % (track, value))
+        return self._do("mixer.setTrackPan(%d, %r)" % (track, value))
 
     def mute(self, track: int, state: bool):
-        return _State._live("mixer.muteTrack(%d, %r)" % (track, state))
+        return self._do("mixer.muteTrack(%d, %r)" % (track, state))
 
     def solo(self, track: int, state: bool):
-        return _State._live("mixer.soloTrack(%d, %r)" % (track, state))
+        return self._do("mixer.soloTrack(%d, %r)" % (track, state))
 
     def route(self, track: int, dest: int, level: float):
         """Посыл track → dest.
@@ -541,15 +548,18 @@ class _Act:
                 _State._live("mixer.setRouteToLevel(%d, %d, %r)" % (track, dest, level))
             except Exception:
                 pass
+            self._persist()
             return "включено"
         try:
-            return _State._live("mixer.setRouteTo(%d, %d, False)" % (track, dest))
+            result = _State._live("mixer.setRouteTo(%d, %d, False)" % (track, dest))
+            self._persist()
+            return result
         except Exception as e:
             return "не вышло: %s" % str(e)[:60]
 
     def param(self, track: int, slot: int, index: int, value: float):
-        return _State._live("plugins.setParamValue(%r, %d, %d, %d)"
-                            % (value, index, track, slot))
+        return self._do("plugins.setParamValue(%r, %d, %d, %d)"
+                        % (value, index, track, slot))
 
     def params(self, track: int, slot: int):
         return _State._live(
@@ -957,11 +967,21 @@ class _Create:
 
 
 class _Safe:
-    """Снапшот и откат микшера через мост (без внешних зависимостей).
+    """Снапшот, откат и сохранение проекта.
 
     snapshot(tag) снимает громкости, панорамы и mute всех дорожек;
-    restore(tag) возвращает их и проверяет, что значения вернулись.
+    restore(tag) возвращает их и проверяет, что значения вернулись;
+    save() сохраняет проект и подтверждает это временем файла;
+    autosave(False) выключает сохранение после каждой правки.
     """
+
+    def save(self, backup: bool = False) -> dict:
+        import flsave
+        return flsave.save(make_backup=backup)
+
+    def autosave(self, on: bool = True) -> bool:
+        _AUTOSAVE["on"] = bool(on)
+        return _AUTOSAVE["on"]
 
     def _dir(self) -> str:
         d = os.path.join(HERE, "_cache", "snap")
