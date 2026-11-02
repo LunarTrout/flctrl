@@ -492,13 +492,20 @@ class Daemon:
 
     def start(self, timeout=90):
         import safe_fl
-        safe_fl.TEST_PROJECT = self.flp
-        self.pid = safe_fl.frida_spawn()
-        self.session = self.frida.attach(self.pid)
+        attach_pid = getattr(self, "attach_pid", None)
+        spawned = attach_pid is None
+        if spawned:
+            safe_fl.TEST_PROJECT = self.flp
+            self.pid = safe_fl.frida_spawn()
+            self.session = self.frida.attach(self.pid)
+        else:
+            self.pid = int(attach_pid)
+            self.session = self.frida.attach(self.pid)
         self.script = self.session.create_script(JS)
         self.script.on("message", self._on_message)
         self.script.load()
-        self.frida.resume(self.pid)
+        if spawned:
+            self.frida.resume(self.pid)
         self.closing = False
 
         def _detached(*_a):

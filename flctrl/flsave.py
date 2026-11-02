@@ -106,9 +106,53 @@ def backup(project: str = PROJECT, why: str = "pre-save") -> str | None:
         return None
 
 
-def save(project: str = PROJECT, make_backup: bool = False,
+def current_project(default: str = PROJECT) -> str:
+    """Путь открытого проекта: берём из заголовка окна FL.
+
+    Имя в заголовке — только имя файла, поэтому ищем его рядом с известными
+    проектами; если не нашли, возвращаем default.
+    """
+    import ctypes.wintypes as wt
+    title = ""
+    pid = _pid()
+    if pid:
+        found = []
+
+        def cb(hwnd, _):
+            p = wt.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(p))
+            if p.value != pid or not user32.IsWindowVisible(hwnd):
+                return True
+            cls = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, cls, 256)
+            if cls.value == MAIN_CLASS:
+                length = user32.GetWindowTextLengthW(hwnd)
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                found.append(buf.value)
+            return True
+
+        proc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)(cb)
+        user32.EnumWindows(proc, 0)
+        title = found[0] if found else ""
+    name = title.split(" - ")[0].strip() if " - " in title else ""
+    if not name.lower().endswith(".flp"):
+        return default
+    base = os.path.dirname(default)
+    candidate = os.path.join(base, name)
+    if os.path.exists(candidate):
+        return candidate
+    for root, _dirs, files in os.walk(base):
+        if name in files:
+            return os.path.join(root, name)
+    return default
+
+
+def save(project: str | None = None, make_backup: bool = False,
          timeout: float = 25.0) -> dict:
     """Сохранить проект и подтвердить это временем изменения файла."""
+    if project is None:
+        project = current_project()
     pid = _pid()
     if not pid:
         return {"ok": False, "error": "FL64 не запущена"}
@@ -123,10 +167,10 @@ def save(project: str = PROJECT, make_backup: bool = False,
     while time.time() < deadline:
         now = _mtime(project)
         if now > before:
-            return {"ok": True, "hwnd": hwnd, "before": before, "after": now,
-                    "backup": copy}
+            return {"ok": True, "hwnd": hwnd, "file": project,
+                    "before": before, "after": now, "backup": copy}
         time.sleep(0.5)
-    return {"ok": False, "hwnd": hwnd, "before": before,
+    return {"ok": False, "hwnd": hwnd, "file": project, "before": before,
             "after": _mtime(project), "backup": copy,
             "error": "файл не обновился (модальный диалог или окно не активно)"}
 
