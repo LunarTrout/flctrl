@@ -27,16 +27,19 @@ import listen_layer as L  # noqa: E402
 
 
 def profile_from_audio(x, fs: int) -> dict:
-    """Профиль дорожки: медианные уровни 28 полос и опорный RMS."""
+    """Профиль дорожки: медианные уровни 28 полос и опорный пик.
+
+    Опорный пик (а не RMS) — потому что в реальном времени мы читаем именно
+    пики; сравнение должно быть в одних единицах.
+    """
     lv, _t = P.band_levels(x, fs)
-    mono = x.mean(axis=1) if x.ndim > 1 else x
-    rms = float(np.sqrt(np.mean(mono ** 2)) + 1e-12)
+    peak = float(np.max(np.abs(x)) + 1e-12)
     active = lv.mean(axis=1) > (lv.mean() - 30)
     if active.sum() > 5:
         lv = lv[active]
     return {
         "levels_db": [round(float(v), 2) for v in np.median(lv, axis=0)],
-        "ref_rms": round(rms, 6),
+        "ref_peak": round(peak, 6),
         "frames": int(lv.shape[0]),
     }
 
@@ -58,8 +61,8 @@ def estimate(profiles: list[dict], peaks: list[float], offset_db: float = 0.0) -
     for prof, peak in zip(profiles, peaks):
         if not peak or peak < 1e-6:
             continue
-        ref = max(float(prof.get("ref_rms", 1e-6)), 1e-9)
-        shift = 20.0 * np.log10(peak / ref)
+        ref = max(float(prof.get("ref_peak", 1e-6)), 1e-9)
+        shift = 20.0 * np.log10(max(peak, 1e-9) / ref)
         levels = np.array(prof["levels_db"], dtype=float) + shift + offset_db
         acc += 10.0 ** (levels / 10.0)
         used.append(bool(True))

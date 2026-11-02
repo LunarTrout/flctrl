@@ -389,6 +389,44 @@ class _Monitor:
             T.unmute_all()
         return out
 
+    def profile_tracks(self, seconds: float = 8.0, start: float = 0.0,
+                       cache: str | None = None) -> dict:
+        """Снять профили всех дорожек по очереди (соло-захват каждой).
+
+        Медленно (по секунд на дорожку), но делается один раз: дальше живые
+        пики дают оценку микса без повторных захватов.
+        """
+        import json
+        import track_capture as T
+        import liveview as V
+
+        n = int(_State._live("mixer.trackCount()"))
+        names = [str(_State._live("mixer.getTrackName(%d)" % i)) for i in range(n)]
+        out = {"tracks": [], "names": names}
+        for i in range(n):
+            try:
+                path = T.grab_any(seconds, start, i)
+                prof = V.profile_file(path)
+                prof["i"] = i
+                prof["name"] = names[i]
+                out["tracks"].append(prof)
+            except Exception as e:
+                out["tracks"].append({"i": i, "name": names[i], "error": str(e)[:80]})
+        if cache:
+            with open(cache, "w", encoding="utf-8") as f:
+                json.dump(out, f, ensure_ascii=False)
+        return out
+
+    def estimate_live(self, profiles: dict, offset_db: float = 0.0) -> dict:
+        """Живая оценка микса: профили + текущие пики."""
+        import liveview as V
+        peaks = self.peaks()
+        usable = [p for p in profiles.get("tracks", []) if "levels_db" in p]
+        pl = [peaks[p["i"]] if p["i"] < len(peaks) else 0.0 for p in usable]
+        r = V.estimate(usable, pl, offset_db=offset_db)
+        r["names"] = [p.get("name", "") for p in usable]
+        return r
+
     def knob(self, track: int, slot: int, index: int, value: float):
         """Крутить ручку плагина вживую, не прерывая звук."""
         return act.param(track, slot, index, value)
