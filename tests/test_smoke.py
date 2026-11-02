@@ -194,6 +194,30 @@ def main() -> int:
         assert callable(fl.predict.lines), "нет predict.lines"
     check("predict: интерфейс", t_predict)
 
+    print("== render: CLI и сторож")
+    def t_render_progress():
+        import render_job as R
+        assert R._parse_progress("Rendering: 17/219") == (17, 219)
+        assert R._parse_progress("vers1.flp - FL Studio 2025") is None
+        assert R._parse_progress("Rendering: мусор") is None
+    check("render: разбор прогресса", t_render_progress)
+
+    def t_render_pid():
+        import render_job as R
+        pid = R.fl_pid()
+        assert isinstance(pid, int) and pid >= 0, "pid не число: %r" % (pid,)
+        assert R.fl_running() == (pid != 0)
+    check("render: определяет FL по pid", t_render_pid)
+
+    def t_render_watch_shape():
+        import tempfile
+        import render_job as R
+        tmp = tempfile.mkdtemp(prefix="flctrl_render_")
+        res = R.watch(tmp, since=0.0, timeout_s=0.0, poll_s=0.1)
+        for key in ("crashed", "progress", "files", "split", "log"):
+            assert key in res, "в ответе нет %s" % key
+    check("render: сторож отдаёт структуру", t_render_watch_shape)
+
     print()
     print("итого: %d прошло, %d упало, %d пропущено" % (len(PASS), len(FAIL), len(SKIP)))
     for n, e in FAIL:

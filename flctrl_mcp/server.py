@@ -164,6 +164,32 @@ def fl_seek(seconds: float) -> dict:
 
 
 @tool
+def fl_render(flp: str, fmt: str = "wav", timeout_s: int = 3600,
+              close_fl: bool = False) -> dict:
+    """Отрендерить проект через CLI FL (без диалогов).
+
+    Если в проекте включён Split mixer tracks — вернёт по файлу на дорожку
+    (split=true). При запущенной FL рендер не стартует: передай close_fl=true,
+    чтобы библиотека закрыла её штатно (не kill).
+    """
+    import render_job as R
+    return R.render(flp, fmt=fmt, timeout_s=timeout_s, close_fl_first=close_fl)
+
+
+@tool
+def fl_render_watch(project_dir: str, since_ts: float = 0.0, fmt: str = "wav",
+                    timeout_s: int = 3600) -> dict:
+    """Дождаться конца рендера: прогресс, падение FL, список файлов.
+
+    since_ts — unix-время старта рендера; 0 значит «сейчас».
+    Падение распознаётся по исчезновению или смене pid FL.
+    """
+    import render_job as R
+    return R.watch(project_dir, since=since_ts or None, fmt=fmt,
+                   timeout_s=timeout_s)
+
+
+@tool
 def fl_health() -> dict:
     """Живо ли управление: запущена ли FL, отвечает ли контроллер, сколько дорожек."""
     return fl.state.health()

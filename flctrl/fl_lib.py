@@ -355,9 +355,11 @@ class _Hear:
         if _PROJECT_IS_OPEN():
             raise RuntimeError("FL открыт с этим проектом — офлайн-рендер невозможен")
         produced = create.render(flp)
-        if not produced or not os.path.exists(produced):
+        files = produced.get("files") if isinstance(produced, dict) else [produced]
+        path = files[0] if files else ""
+        if not path or not os.path.exists(path):
             raise RuntimeError("рендер не дал файла")
-        shutil.copy2(produced, out)
+        shutil.copy2(path, out)
         return out
 
     def at(self, flp: str, start: float, dur: float = 20.0) -> dict:
@@ -948,33 +950,25 @@ class _Create:
             return self._live_op("trackcount")
         return self._live_run(["trackcount"], port)
 
-    def render(self, flp: str, timeout_s: int = 900, fmt: str = "wav") -> str:
-        """Отрисовать проект через CLI FL (FL должен быть закрыт).
+    def render(self, flp: str, timeout_s: int = 3600, fmt: str = "wav",
+               close_fl: bool = False) -> dict:
+        """Отрисовать проект через CLI FL.
 
-        FL игнорирует путь /R и пишет файл в папку экспорта проекта под его
-        именем — поэтому возвращаем фактический путь, найденный после запуска.
+        Возвращает {'ok', 'files', 'split'}: если в проекте включён
+        Split mixer tracks, файлов будет по одному на дорожку. FL пишет в
+        папку экспорта проекта, путь из /R игнорируется — поэтому смотрим на
+        появившиеся файлы. При живой FL рендер не стартует: либо закрыть её
+        (close_fl=True, штатно), либо получить ошибку.
         """
-        import glob
-        import subprocess
-        import time
+        import render_job as R
+        return R.render(flp, fmt=fmt, timeout_s=timeout_s,
+                        close_fl_first=close_fl)
 
-        fl = r"C:\Programs\Fl Studio 2025\FL64.exe"
-        proj_dir = os.path.dirname(os.path.abspath(flp))
-        name = os.path.splitext(os.path.basename(flp))[0]
-        before = set(glob.glob(os.path.join(proj_dir, "**", "*." + fmt), recursive=True))
-        cmd = [fl, "/E" + fmt, flp]
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        t0 = time.time()
-        out = ""
-        while time.time() - t0 < timeout_s:
-            time.sleep(3)
-            found = set(glob.glob(os.path.join(proj_dir, "**", "*." + fmt), recursive=True))
-            new = [f for f in found - before if name.lower() in os.path.basename(f).lower()]
-            if new:
-                out = max(new, key=os.path.getmtime)
-                if os.path.getsize(out) > 100000:
-                    break
-        return out
+    def watch_render(self, project_dir: str, since: float | None = None,
+                     fmt: str = "wav", timeout_s: int = 3600) -> dict:
+        """Дождаться конца рендера: прогресс, падение, файлы."""
+        import render_job as R
+        return R.watch(project_dir, since=since, fmt=fmt, timeout_s=timeout_s)
 
     def plugin(self, fst: str, insert: int, slot: int, flp: str | None = None):
         import fl_add_plugin as A
