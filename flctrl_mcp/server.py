@@ -38,10 +38,46 @@ sys.path.insert(0, PKG)
 import fl_lib as fl  # noqa: E402
 
 # всё находим на месте: пути не вбиты, окружения ищутся сами
-PY_HEAR = discovery.hear_python()
+PY_HEAR = None          # выбирается лениво: см. hear_python_checked()
 HEAR_CLI = os.path.join(PKG, "hear_cli.py")
 if discovery.daemon():
     fl.link.DEFAULT_DAEMON = discovery.daemon()
+
+
+def hear_python_checked() -> str:
+    """Интерпретатор, в котором реально есть phonometry.
+
+    Раньше путь вычислялся один раз при импорте: если сервер поднимался до
+    правки поиска окружения, слух оставался сломанным до перезапуска всего
+    харнесса. Теперь интерпретатор проверяется вызовом и кэшируется, а при
+    неудаче перебираются запасные варианты.
+    """
+    global PY_HEAR
+    if PY_HEAR:
+        return PY_HEAR
+    candidates = []
+    try:
+        candidates.append(discovery.hear_python())
+    except Exception:
+        pass
+    env = os.environ.get("FLCTRL_PY_HEAR")
+    if env:
+        candidates.append(env)
+    candidates += [
+        r"C:\Users\epicc\mcp\flstudio-mcp\.venv313\Scripts\python.exe",
+        os.path.join(os.path.dirname(PKG), ".venv313", "Scripts", "python.exe"),
+    ]
+    seen = set()
+    for path in candidates:
+        if not path or path in seen or not os.path.exists(path):
+            continue
+        seen.add(path)
+        probe = subprocess.run([path, "-c", "import phonometry"],
+                               capture_output=True)
+        if probe.returncode == 0:
+            PY_HEAR = path
+            return path
+    raise RuntimeError("нет интерпретатора с phonometry; задайте FLCTRL_PY_HEAR")
 
 mcp = FastMCP("flctrl", instructions="""FL Studio под управлением из кода: читать проект, мерить звук, править параметры,
 создавать плагины вживую.
@@ -127,8 +163,8 @@ def tool(fn):
 
 
 def hear(cmd: str, *args: str, timeout: int = 900):
-    """Вызвать слой слуха в окружении 3.13 и вернуть разобранный ответ."""
-    p = subprocess.run([PY_HEAR, HEAR_CLI, cmd, *args],
+    """Вызвать слой слуха в окружении с phonometry и вернуть разобранный ответ."""
+    p = subprocess.run([hear_python_checked(), HEAR_CLI, cmd, *args],
                        capture_output=True, text=True, timeout=timeout)
     txt = (p.stdout or "").strip()
     if not txt:

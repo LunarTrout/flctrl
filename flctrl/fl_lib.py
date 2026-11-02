@@ -62,16 +62,52 @@ def _parse(value):
     return r
 
 
+def _hear_python() -> str:
+    """Интерпретатор с phonometry: env → соседние папки → известные места.
+
+    Путь проверяется запуском `import phonometry`, а не по имени папки: иначе
+    берётся окружение без библиотеки и слух падает с ModuleNotFoundError.
+    """
+    if getattr(_hear_python, "_cached", None):
+        return _hear_python._cached
+    import subprocess
+    import glob
+    root = os.path.dirname(HERE)
+    candidates = []
+    env = os.environ.get("FLCTRL_PY_HEAR")
+    if env:
+        candidates.append(env)
+    candidates += [os.path.join(HERE, "..", ".venv313", "Scripts", "python.exe"),
+                   os.path.join(root, ".venv313", "Scripts", "python.exe"),
+                   os.path.join(root, "..", "flstudio-mcp", ".venv313", "Scripts",
+                                "python.exe")]
+    for sibling in glob.glob(os.path.join(root, "..", "*", ".venv313", "Scripts",
+                                          "python.exe")):
+        candidates.append(sibling)
+    for path in candidates:
+        path = os.path.abspath(path) if path else ""
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            probe = subprocess.run([path, "-c", "import phonometry"],
+                                   capture_output=True, timeout=60)
+        except Exception:
+            continue
+        if probe.returncode == 0:
+            _hear_python._cached = path
+            return path
+    raise RuntimeError("нет окружения для слуха: нужен python с phonometry "
+                       "(задайте FLCTRL_PY_HEAR)")
+
+
 def _hear_cli(cmd: str, *args: str, timeout: int = 900):
-    """Выполнить замер в окружении со phonometry (обычно 3.13)."""
+    """Выполнить замер в окружении со phonometry."""
     import json
     import subprocess
-    py = os.environ.get("FLCTRL_PY_HEAR") or os.path.join(
-        os.path.dirname(HERE), ".venv313", "Scripts", "python.exe")
+    py = _hear_python()
     cli = os.path.join(HERE, "hear_cli.py")
-    if not (os.path.exists(py) and os.path.exists(cli)):
-        raise RuntimeError("нет окружения для слуха: нужен python с phonometry "
-                           "(задайте FLCTRL_PY_HEAR)")
+    if not os.path.exists(cli):
+        raise RuntimeError("нет hear_cli.py рядом с библиотекой")
     p = subprocess.run([py, cli, cmd, *args], capture_output=True, text=True, timeout=timeout)
     txt = (p.stdout or "").strip()
     if not txt:
