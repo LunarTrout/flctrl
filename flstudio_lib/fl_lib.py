@@ -211,6 +211,12 @@ class _Hear:
         import listen_layer as L
         return L.sections(path, min_len)
 
+    def unmask(self, stems: dict, masker: str, masked: str,
+               *args, **kwargs) -> dict:
+        """Сколько вернётся в дорожке, если убрать соседа (разгрузка)."""
+        import listen_layer as L
+        return L.unmask(stems, masker, masked, *args, **kwargs)
+
     def match(self, path_a: str, path_b: str, min_len: float = 8.0):
         """Сопоставить однотипные секции двух файлов по громкости."""
         import listen_layer as L
