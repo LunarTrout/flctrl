@@ -137,10 +137,18 @@ def names() -> list:
     return [str(call("mixer.getTrackName(%d)" % i)) for i in range(n)]
 
 
-def capture(seconds: float, fs: int = 48000) -> np.ndarray:
+def capture(seconds: float, fs: int = 48000, device: str | None = None) -> np.ndarray:
+    """Записать отрезок с выхода.
+
+    device — имя устройства (например, виртуального кабеля). По умолчанию
+    пишем с того, что сейчас является устройством воспроизведения.
+    """
     import soundcard as sc
-    spk = sc.default_speaker()
-    mic = sc.get_microphone(id=str(spk.name), include_loopback=True)
+    if device:
+        name = device
+    else:
+        name = str(sc.default_speaker().name)
+    mic = sc.get_microphone(id=name, include_loopback=True)
     with mic.recorder(samplerate=fs, channels=2) as rec:
         data = rec.record(numframes=int(seconds * fs))
     return np.asarray(data, dtype=np.float64)
