@@ -1,0 +1,290 @@
+"""flctrl-mcp: MCP-сервер поверх библиотеки flctrl.
+
+Даёт ассистенту один вход ко всему: видеть проект, мерить звук, править
+параметры, создавать плагины вживую, проверять решения.
+
+Запуск:
+    .venv312\\Scripts\\python.exe flctrl_mcp\\server.py
+
+Окружения: сам сервер живёт на 3.12 (frida, pyflp), а замеры вызывает
+у hear_cli.py на 3.13 — слух требует phonometry.
+
+Настройка (Hermes / Claude):
+    "mcpServers": {
+      "flctrl": {
+        "command": "C:/Users/epicc/mcp/flstudio-mcp/.venv312/Scripts/python.exe",
+        "args": ["C:/Users/epicc/mcp/flstudio-lib/flctrl_mcp/server.py"]
+      }
+    }
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+PKG = os.path.join(os.path.dirname(HERE), "flctrl")
+sys.path.insert(0, PKG)
+
+from fastmcp import FastMCP  # noqa: E402
+
+import discovery  # noqa: E402
+
+PKG = discovery.package_dir()
+sys.path.insert(0, PKG)
+
+import fl_lib as fl  # noqa: E402
+
+# всё находим на месте: пути не вбиты, окружения ищутся сами
+PY_HEAR = discovery.hear_python()
+HEAR_CLI = os.path.join(PKG, "hear_cli.py")
+if discovery.daemon():
+    fl.link.DEFAULT_DAEMON = discovery.daemon()
+
+mcp = FastMCP("flctrl")
+
+
+def hear(cmd: str, *args: str, timeout: int = 900):
+    """Вызвать слой слуха в окружении 3.13 и вернуть разобранный ответ."""
+    p = subprocess.run([PY_HEAR, HEAR_CLI, cmd, *args],
+                       capture_output=True, text=True, timeout=timeout)
+    txt = (p.stdout or "").strip()
+    if not txt:
+        return {"error": (p.stderr or "")[-400:]}
+    try:
+        return json.loads(txt)
+    except Exception:
+        return {"raw": txt[-1500:], "stderr": (p.stderr or "")[-300:]}
+
+
+# ---------------------------------------------------------------- связь и чтение
+
+@mcp.tool()
+def fl_health() -> dict:
+    """Живо ли управление: запущена ли FL, отвечает ли контроллер, сколько дорожек."""
+    return fl.state.health()
+
+
+@mcp.tool()
+def fl_link_ensure() -> dict:
+    """Поднять посредник, если он упал. Библиотека делает это и сама."""
+    return fl.link.ensure()
+
+
+@mcp.tool()
+def fl_tracks() -> list:
+    """Дорожки микшера: индекс, имя, громкость, панорама, число плагинов."""
+    return fl.state.tracks()
+
+
+@mcp.tool()
+def fl_channels() -> list:
+    """Каналы рэка: что на чём играет."""
+    return fl.state.channels()
+
+
+@mcp.tool()
+def fl_plugins() -> list:
+    """Плагины по слотам: какая дорожка, какой слот, что стоит."""
+    return fl.state.plugins()
+
+
+@mcp.tool()
+def fl_playlist(flp: str | None = None) -> dict:
+    """Плейлист проекта: дорожки и клипы (по умолчанию — из открытого проекта)."""
+    return fl.state.playlist(flp) if flp else fl.state.playlist(_current_flp())
+
+
+@mcp.tool()
+def fl_clip_files(flp: str | None = None) -> list:
+    """Связь «клип → файл»: позиция, длина, путь к аудио."""
+    return fl.state.clip_files(flp) if flp else fl.state.clip_files(_current_flp())
+
+
+@mcp.tool()
+def fl_automation(flp: str | None = None) -> list:
+    """Автоматизация из файла проекта."""
+    return fl.state.automation(flp) if flp else fl.state.automation(_current_flp())
+
+
+# ---------------------------------------------------------------- слух
+
+@mcp.tool()
+def fl_measure(path: str, a: float = 0.0, b: float = 30.0) -> dict:
+    """Замер отрезка: соны, фоны, резкость, LUFS, crest, LDR, области, стерео."""
+    return hear("measure", path, "--a", str(a), "--b", str(b))
+
+
+@mcp.tool()
+def fl_bands(path: str) -> dict:
+    """240 полос Барка: уровень, ширина, модуляция."""
+    return hear("bands", path)
+
+
+@mcp.tool()
+def fl_profile(path: str) -> dict:
+    """Полный профиль файла (кэшируется)."""
+    return hear("profile", path)
+
+
+@mcp.tool()
+def fl_sections(path: str) -> dict:
+    """Секции трека по плотности."""
+    return hear("sections", path)
+
+
+@mcp.tool()
+def fl_masking(mix_path: str, stems: dict | None = None) -> dict:
+    """Кто кого забивает: маскировка по полосам между стемами."""
+    return hear("masking", mix_path, json.dumps(stems or {}))
+
+
+@mcp.tool()
+def fl_describe(path: str) -> dict:
+    """Узнавание: на что похоже по материалу (эмбеддинг)."""
+    return hear("describe", path)
+
+
+@mcp.tool()
+def fl_style_sim(a: str, b: str) -> dict:
+    """Близость стиля сведения двух файлов."""
+    return hear("style", a, b)
+
+
+# ---------------------------------------------------------------- правка
+
+@mcp.tool()
+def fl_set_volume(track: int, value: float) -> dict:
+    """Громкость дорожки (0..1)."""
+    fl.act.volume(track, value)
+    return {"track": track, "volume": value}
+
+
+@mcp.tool()
+def fl_set_pan(track: int, value: float) -> dict:
+    """Панорама дорожки (-1 лево .. 1 право)."""
+    fl.act.pan(track, value)
+    return {"track": track, "pan": value}
+
+
+@mcp.tool()
+def fl_mute(track: int, state: bool = True) -> dict:
+    """Mute дорожки."""
+    fl.act.mute(track, state)
+    return {"track": track, "muted": state}
+
+
+@mcp.tool()
+def fl_solo(track: int, state: bool = True) -> dict:
+    """Solo дорожки."""
+    fl.act.solo(track, state)
+    return {"track": track, "solo": state}
+
+
+@mcp.tool()
+def fl_params(track: int, slot: int) -> list:
+    """Все ручки плагина в слоте."""
+    return fl.act.params(track, slot)
+
+
+@mcp.tool()
+def fl_set_param(track: int, slot: int, index: int, value: float) -> dict:
+    """Поставить ручку плагина (0..1)."""
+    fl.act.param(track, slot, index, value)
+    return {"track": track, "slot": slot, "index": index, "value": value}
+
+
+# ---------------------------------------------------------------- создание
+
+@mcp.tool()
+def fl_live_start(flp: str | None = None) -> dict:
+    """Поднять FL под Frida для живых операций (создание, удаление плагинов)."""
+    return fl.create.live_start(flp or _current_flp())
+
+
+@mcp.tool()
+def fl_live_stop() -> dict:
+    """Закрыть стенд Frida."""
+    return fl.create.live_stop()
+
+
+@mcp.tool()
+def fl_live_slots(track: int) -> dict:
+    """Карта слотов дорожки из памяти: занят/пуст, параметры, модуль."""
+    return fl.create.live_slots(track)
+
+
+@mcp.tool()
+def fl_live_insert(track: int, slot: int, plugin: str) -> dict:
+    """Вставить плагин вживую, без перезапуска проекта."""
+    return fl.create.live_insert(track, slot, plugin)
+
+
+@mcp.tool()
+def fl_live_delete(track: int, slot: int) -> dict:
+    """Удалить плагин из слота вживую."""
+    return fl.create.live_delete(track, slot)
+
+
+@mcp.tool()
+def fl_live_replace(track: int, slot: int, plugin: str) -> dict:
+    """Заменить плагин в слоте вживую."""
+    return fl.create.live_replace(track, slot, plugin)
+
+
+@mcp.tool()
+def fl_plugin_file(track: int, slot: int, fst: str) -> dict:
+    """Вставить плагин через файл .fst (нужна перезагрузка проекта после)."""
+    return {"result": fl.create.plugin(fst, track, slot)}
+
+
+@mcp.tool()
+def fl_reload(flp: str | None = None) -> dict:
+    """Перечитать проект в FL (нужно после правки .flp)."""
+    return {"result": fl.create.reload(flp or _current_flp())}
+
+
+# ---------------------------------------------------------------- проверка
+
+@mcp.tool()
+def fl_judge(before: dict, after: dict, goals: dict | None = None,
+             corridor: dict | None = None, tolerance: float = 0.0) -> dict:
+    """Принять или отклонить правку по числам: значимость, цель, ущерб."""
+    return fl.judge.verdict(before, after, goals or {}, corridor, tolerance)
+
+
+@mcp.tool()
+def fl_predict_change(mix_profile: dict, track_profile: dict, gain_db: float,
+                      eq: list | None = None) -> dict:
+    """Предсказать, что даст правка дорожки, не применяя её."""
+    return fl.predict.change(mix_profile, track_profile, gain_db, eq or [])
+
+
+# ---------------------------------------------------------------- служебное
+
+def _current_flp() -> str:
+    """Проект, открытый сейчас в FL (по заголовку окна)."""
+    try:
+        r = subprocess.run(["tasklist", "/V", "/FI", "IMAGENAME eq FL64.exe"],
+                           capture_output=True, timeout=20)
+        import re
+        txt = r.stdout.decode("cp866", "ignore")
+        m = re.search(r"([A-Za-z]:\\[^\"]+\.flp)", txt)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return os.environ.get("FLCTRL_FLP", "")
+
+
+if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        import asyncio
+        import json as _json
+        tools = asyncio.run(mcp.list_tools())
+        print(_json.dumps({"tools": len(tools), "names": sorted(t.name for t in tools),
+                           "env": discovery.summary()}, ensure_ascii=False, indent=1))
+        raise SystemExit(0)
+    mcp.run()

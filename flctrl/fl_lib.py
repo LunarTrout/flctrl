@@ -44,25 +44,157 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "flpresearch"))
 
 
+# ---------------------------------------------------------------- разбор ответов
+
+def _parse(value):
+    """Разобрать ответ контроллера: он приходит строкой repr, не JSON."""
+    import ast
+    import json
+    if isinstance(value, (list, dict)):
+        return value
+    s = str(value).strip()
+    try:
+        r = json.loads(s)
+    except Exception:
+        return ast.literal_eval(s)
+    if isinstance(r, str):
+        return ast.literal_eval(r)
+    return r
+
+
 # ---------------------------------------------------------------- state
+
+class _Link:
+    """Транспорт до FL: демон-посредник и порт 9787.
+
+    Библиотека не должна требовать ручных шагов: если посредник не поднят,
+    она поднимает его сама и проверяет, что связь появилась.
+    """
+
+    PORT = 9787
+    DEFAULT_DAEMON = r"C:\Users\epicc\mcp\flstudio-mcp\.venv312\Scripts\fl-studio-mcp-daemon.exe"
+
+    def _port_open(self, timeout: float = 1.0) -> bool:
+        import socket
+        try:
+            with socket.create_connection(("127.0.0.1", self.PORT), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
+    def daemon(self) -> str:
+        return os.environ.get("FLCTRL_DAEMON", self.DEFAULT_DAEMON)
+
+    def midi_ports(self) -> list:
+        """Есть ли порты loopMIDI (без них контроллер не заговорит)."""
+        import subprocess
+        try:
+            r = subprocess.run([
+                "powershell", "-NoProfile", "-Command",
+                "Get-ChildItem 'HKCU:\\Software\\Tobias Erichsen\\loopMIDI\\Ports'"
+                " | Select-Object -ExpandProperty Name"],
+                capture_output=True, timeout=20)
+            return [x for x in r.stdout.decode("cp866", "ignore").split() if x.strip()]
+        except Exception:
+            return []
+
+    def status(self) -> dict:
+        import subprocess
+        out = {"daemon": self._port_open(), "fl": False, "midi_ports": self.midi_ports()}
+        try:
+            r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq FL64.exe"],
+                               capture_output=True, timeout=20)
+            out["fl"] = b"FL64.exe" in (r.stdout or b"")
+        except Exception:
+            pass
+        return out
+
+    def ensure(self, timeout: float = 45.0) -> dict:
+        """Поднять посредник, если он не отвечает. Возвращает что было сделано."""
+        import subprocess
+        import time
+
+        was = self._port_open()
+        if was:
+            return {"daemon": True, "started": False, "port": self.PORT}
+        path = self.daemon()
+        if not os.path.exists(path):
+            return {"daemon": False, "started": False, "error": "нет файла %s" % path}
+        env = dict(os.environ)
+        env.setdefault("FLSTUDIO_MCP_PORT_FROM_FL", "FLStudioMCP RX")
+        flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | NEW_PROCESS_GROUP
+        subprocess.Popen([path], cwd=os.path.dirname(path), env=env,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=flags, close_fds=True)
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            time.sleep(1.0)
+            if self._port_open():
+                return {"daemon": True, "started": True, "port": self.PORT,
+                        "seconds": round(time.time() - t0, 1)}
+        return {"daemon": False, "started": True, "port": self.PORT,
+                "error": "порт не открылся за %.0f с" % timeout}
+
 
 class _State:
     """Чтение состояния: живое (мост) и из файла."""
 
     @staticmethod
-    def _live(expr):
+    def _live(expr, heal: bool = True):
         import q
-        return q.live(expr)
+        try:
+            return q.live(expr)
+        except Exception:
+            if not heal:
+                raise
+            # посредник мог умереть — библиотека поднимает его сама
+            res = link.ensure()
+            if not res.get("daemon"):
+                raise
+            return q.live(expr)
 
-    def tracks(self):
-        import q
-        import json
-        return json.loads(self._live("__import__('json').dumps(%s)" % q.LIVE_EXPR["tracks"]))
+    def tracks(self, chunk: int = 6):
+        """Живой микшер. Запрашивается кусками: длинные выражения транспорт режет."""
+        n = int(self._live("mixer.trackCount()"))
+        out = []
+        for a in range(0, n, chunk):
+            expr = ("[(i, str(mixer.getTrackName(i)), round(mixer.getTrackVolume(i), 2), "
+                    "round(mixer.getTrackPan(i), 2), sum(1 for s in range(10) "
+                    "if plugins.isValid(i, s))) for i in range(%d, %d)]"
+                    % (a, min(a + chunk, n)))
+            for row in _parse(self._live(expr)):
+                out.append({"i": row[0], "name": row[1], "vol": row[2],
+                            "pan": row[3], "fx": row[4]})
+        return out
+
+    def health(self) -> dict:
+        """Живо ли управление и что именно не так. Не бросает исключение."""
+        import subprocess
+        out = {"fl_running": False, "bridge": False, "tracks": None, "hint": ""}
+        try:
+            r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq FL64.exe"],
+                               capture_output=True, timeout=20)
+            out["fl_running"] = b"FL64.exe" in (r.stdout or b"")
+        except Exception:
+            pass
+        try:
+            out["tracks"] = int(self._live("mixer.trackCount()"))
+            out["bridge"] = True
+        except Exception as e:
+            out["hint"] = str(e)[:200]
+        if not out["fl_running"]:
+            out["hint"] = "FL Studio не запущена"
+        elif not out["bridge"]:
+            out["hint"] = ("FL запущена, но контроллер не отвечает. "
+                           "F10 -> MIDI settings -> Update MIDI scripts -> OK. "
+                           "Обычно причина в принудительном закрытии FL: "
+                           "настройки MIDI сохраняются только при нормальном выходе.")
+        return out
 
     def channels(self):
         import q
         import json
-        return json.loads(self._live("__import__('json').dumps(%s)" % q.LIVE_EXPR["channels"]))
+        return _parse(self._live(q.LIVE_EXPR["channels"]))
 
     def plugins(self):
         return self._live("[list(x) for x in %s]" % q_plugins())
@@ -751,6 +883,7 @@ class _Judge:
 
 
 state = _State()
+link = _Link()
 hear = _Hear()
 act = _Act()
 monitor = _Monitor()

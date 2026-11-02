@@ -47,7 +47,38 @@ def windows() -> list[tuple[int, str]]:
     return out
 
 
+def close_graceful(timeout_s: int = 25) -> bool:
+    """Закрыть FL нормально, чтобы она сохранила настройки MIDI.
+
+    Принудительное убийство ломает контроллер: FL пишет конфиг устройств
+    только при штатном выходе. Поэтому сначала вежливое закрытие и ожидание.
+    """
+    for pid, _title in windows():
+        _ps("(New-Object -ComObject WScript.Shell).AppActivate(%d) | Out-Null; "
+            "(Get-Process -Id %d).CloseMainWindow() | Out-Null" % (pid, pid))
+    for _ in range(int(timeout_s / 1.5)):
+        time.sleep(1.5)
+        if not windows():
+            return True
+    return not windows()
+
+
 def kill_all() -> None:
+    """Закрыть FL. ТОЛЬКО если это тестовый экземпляр или разрешено явно.
+
+    Защита от потери работы: чужой проект (пользовательский) не закрывается
+    никогда — ни агентом, ни стендом. Обойти можно только переменной
+    окружения FL_ALLOW_KILL=1, и это осознанное действие, а не случайность.
+    """
+    if os.environ.get("FL_ALLOW_KILL") == "1":
+        _ps("Get-Process FL64 -ErrorAction SilentlyContinue | Stop-Process -Force")
+        return
+    foreign = [w for w in windows() if TEST_MARK not in w[1].lower()]
+    if foreign:
+        raise RuntimeError(
+            "FL открыта с чужим проектом, не закрываю: %s. "
+            "Работа пользователя не должна теряться. Если закрыть всё же надо — "
+            "FL_ALLOW_KILL=1." % ", ".join("%d %s" % (p, t or "?") for p, t in foreign))
     _ps("Get-Process FL64 -ErrorAction SilentlyContinue | Stop-Process -Force")
 
 
@@ -56,6 +87,10 @@ def kill_foreign() -> list[str]:
     killed = []
     for pid, title in windows():
         if TEST_MARK not in title.lower():
+            if os.environ.get("FL_ALLOW_KILL") != "1":
+                raise RuntimeError(
+                    "FL открыта с чужим проектом, не закрываю: %d %s. "
+                    "Работа пользователя не должна теряться." % (pid, title or "?"))
             _ps("Stop-Process -Id %d -Force" % pid)
             killed.append("%d %s" % (pid, title or "(без заголовка)"))
     return killed

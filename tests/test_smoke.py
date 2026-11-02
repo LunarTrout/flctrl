@@ -14,12 +14,43 @@ import sys
 import traceback
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PKG = os.path.join(HERE, "flctrl")
+sys.path.insert(0, PKG)
 sys.path.insert(0, HERE)
 
 import numpy as np
 
-FLP = r"C:/Users/epicc/Desktop/PROJECTS/vers1/vers1.flp"
+FLP = os.environ.get("FLCTRL_TEST_FLP", r"C:/Users/epicc/Desktop/PROJECTS/vers1/vers1.flp")
 WAV = os.path.join(HERE, "_cache", "desc", "mix25.wav")
+
+
+def make_test_wav(path: str, seconds: float = 20.0, sr: int = 44100) -> None:
+    """Синтетический материал, если своего wav нет.
+
+    Смесь синусов с шумом и затуханием — достаточно, чтобы замер, полосы,
+    кривая и песочница считались. Стерео, чтобы работали метрики ширины.
+    """
+    if os.path.exists(path):
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    rng = np.random.default_rng(7)
+    t = np.arange(int(seconds * sr)) / sr
+    env = np.exp(-0.5 * (t % 4.0))          # пульсация раз в 4 секунды
+    left = 0.5 * np.sin(2 * np.pi * 55 * t) + 0.2 * np.sin(2 * np.pi * 440 * t)
+    right = 0.5 * np.sin(2 * np.pi * 55 * t + 0.3) + 0.2 * np.sin(2 * np.pi * 660 * t)
+    noise = rng.normal(0, 0.05, len(t))
+    x = np.stack([(left + noise) * env, (right + noise) * env], axis=1).astype(np.float32)
+    x /= max(1e-9, np.abs(x).max()) * 1.1
+    try:
+        import soundfile as sf
+        sf.write(path, x, sr)
+    except Exception:
+        import wave
+        with wave.open(path, "wb") as f:
+            f.setnchannels(2)
+            f.setsampwidth(2)
+            f.setframerate(sr)
+            f.writeframes((x * 32767).astype("<i2").tobytes())
 
 PASS, FAIL, SKIP = [], [], []
 
@@ -42,6 +73,8 @@ def skip(name: str, why: str):
 
 def main() -> int:
     import fl_lib as fl
+
+    make_test_wav(WAV)
 
     print("== state: чтение проекта (файл)")
     if not os.path.exists(FLP):
