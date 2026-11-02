@@ -27,6 +27,49 @@ import perceptual as P
 REGIONS = P.REGIONS
 
 
+def _stereo_bands(x: np.ndarray, fs: int) -> dict:
+    """Ширина и корреляция ПО ПОЛОСАМ: одна цифра на весь микс врёт.
+
+    Считаем по кросс-спектру: для каждой полосы — доля боковой энергии и
+    нормированная корреляция L/R. Так видно, где низ разъехан, а верх узок.
+    """
+    if x.shape[1] < 2:
+        return {"width_bands": [], "corr_bands": []}
+    nfft = 4096
+    hop = nfft // 2
+    win = np.hanning(nfft)
+    left, right = x[:, 0], x[:, 1]
+    frames = 1 + (len(left) - nfft) // hop if len(left) > nfft else 0
+    if frames <= 0:
+        return {"width_bands": [], "corr_bands": []}
+    idx = np.arange(nfft)[None, :] + hop * np.arange(frames)[:, None]
+    L = np.fft.rfft(left[idx] * win, axis=1)
+    R = np.fft.rfft(right[idx] * win, axis=1)
+    freqs = np.fft.rfftfreq(nfft, 1 / fs)
+
+    # полосы как в perceptual (28 третьоктавных центров)
+    centres = P.FC
+    width_bands, corr_bands = [], []
+    for fc in centres:
+        lo, hi = fc / 2 ** (1 / 6), fc * 2 ** (1 / 6)
+        m = (freqs >= lo) & (freqs < hi)
+        if not m.any():
+            width_bands.append(0.0)
+            corr_bands.append(1.0)
+            continue
+        pl = np.sum(np.abs(L[:, m]) ** 2, axis=1)
+        pr = np.sum(np.abs(R[:, m]) ** 2, axis=1)
+        xr = np.real(np.sum(L[:, m] * np.conj(R[:, m]), axis=1))
+        denom = np.sqrt(np.maximum(pl * pr, 1e-30))
+        corr = float(np.mean(xr / denom)) if len(denom) else 1.0
+        mid = (pl + pr + 2 * xr) / 4.0
+        side = (pl + pr - 2 * xr) / 4.0
+        w = float(np.sqrt(np.mean(side) / (np.mean(mid) + 1e-30)))
+        width_bands.append(w)
+        corr_bands.append(corr)
+    return {"width_bands": width_bands, "corr_bands": corr_bands}
+
+
 def _read(path: str, a: float | None = None, b: float | None = None):
     import soundfile as sf
 
@@ -131,6 +174,7 @@ def measure(path: str, a: float | None = None, b: float | None = None) -> dict:
         "bands_rel": [float(v - np.mean(bands_db)) for v in bands_db],
         "holes": holes, "clip_samples": clip, "dc": dc,
         "noise_floor_db": noise_floor, **ons, **stereo,
+        **_stereo_bands(x, fs),
     }
 
 
@@ -215,7 +259,25 @@ def audit(mine: dict, refs: list[dict]) -> dict:
     return {"rows": rows, "mastering": mastering,
             "bands_out_of_corridor": out_of,
             "bands_detail": bands_detail[:10],
+            "stereo_bands": _compare_series(mine.get("width_bands"), refs, "width_bands"),
+            "corr_bands": _compare_series(mine.get("corr_bands"), refs, "corr_bands"),
             "bad": [r for r in rows if r["flag"] == "хуже"]}
+
+
+def _compare_series(mine_v, refs: list[dict], key: str) -> dict:
+    """Сравнить по-полосную кривую с коридором референсов."""
+    series = [r.get(key) for r in refs if r.get(key)]
+    if not mine_v or not series:
+        return {"bands_out": [], "count": 0, "worst": []}
+    arr = np.array(series)
+    lo = np.percentile(arr, 25, axis=0)
+    hi = np.percentile(arr, 75, axis=0)
+    out = []
+    for i, (v, l, h) in enumerate(zip(mine_v, lo, hi)):
+        if v < l - 0.05 or v > h + 0.05:
+            out.append({"band": i, "mine": float(v), "lo": float(l), "hi": float(h)})
+    worst = sorted(out, key=lambda b: abs(b["mine"] - (b["lo"] + b["hi"]) / 2), reverse=True)[:5]
+    return {"bands_out": out, "count": len(out), "worst": worst}
 
 
 def main(argv=None) -> int:
@@ -245,6 +307,16 @@ def main(argv=None) -> int:
     for b in res["bands_detail"]:
         print("  полоса %2d: наш %.1f, коридор %.1f…%.1f дБ" % (
             b["band"], b["mine"], b["lo"], b["hi"]))
+    for key, label in (("stereo_bands", "ширина по полосам"),
+                       ("corr_bands", "корреляция по полосам")):
+        info = res.get(key) or {}
+        if info.get("count"):
+            print("\n%s: вне коридора %d полос" % (label, info["count"]))
+            for b in info["worst"][:3]:
+                print("  полоса %2d: наш %.2f, коридор %.2f…%.2f" % (
+                    b["band"], b["mine"], b["lo"], b["hi"]))
+        else:
+            print("\n%s: в коридоре" % label)
     print("\nхуже референсов по фронтам: %d" % len(res["bad"]))
     for r in res["bad"]:
         print("  %s: %.2f против %.2f" % (r["label"], r["mine"], r["ref_median"]))
