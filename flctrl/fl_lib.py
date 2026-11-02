@@ -170,24 +170,18 @@ class _State:
     def routing(self, track: int, dests: list | None = None) -> list:
         """Куда дорожка шлёт: список (получатель, уровень).
 
-        Сначала спрашиваем, какие посылы вообще включены (getRouteSendActive —
-        переживает перебор всех дорожек), потом уточняем уровень у каждого.
-        Напрямую перебирать уровни нельзя: на части индексов FL отвечает
-        «Index out of range».
+        Важно: в этой FL и чтение, и запись идут в порядке
+        (получатель, источник) — getRouteToLevel(dest, track).
+        Обратный порядок даёт «Index out of range», а не ошибку в данных.
         """
         n = int(self._live("mixer.trackCount()"))
         cand = dests if dests is not None else list(range(n))
-        expr = "[d for d in %s if mixer.getRouteSendActive(%d, d)]" % (cand, track)
-        try:
-            active = _parse(self._live(expr))
-        except Exception:
-            active = []
         out = []
-        for d in active:
+        for d in cand:
             try:
-                lvl = float(self._live("mixer.getRouteToLevel(%d, %d)" % (track, int(d))))
+                lvl = float(self._live("mixer.getRouteToLevel(%d, %d)" % (int(d), track)))
             except Exception:
-                lvl = -1.0
+                continue
             out.append((int(d), lvl))
         return out
 
@@ -215,10 +209,18 @@ class _State:
                            "настройки MIDI сохраняются только при нормальном выходе.")
         return out
 
-    def channels(self):
-        import q
-        import json
-        return _parse(self._live(q.LIVE_EXPR["channels"]))
+    def channels(self, chunk: int = 6):
+        """Каналы рэка. Кусками: длинные выражения транспорт режет."""
+        n = int(self._live("channels.channelCount()"))
+        out = []
+        for a in range(0, n, chunk):
+            expr = ("[(i, str(channels.getChannelName(i)), "
+                    "round(channels.getChannelVolume(i), 2), "
+                    "round(channels.getChannelPan(i), 2)) "
+                    "for i in range(%d, %d)]" % (a, min(a + chunk, n)))
+            for row in _parse(self._live(expr)):
+                out.append({"i": row[0], "name": row[1], "vol": row[2], "pan": row[3]})
+        return out
 
     def plugins(self):
         return self._live("[list(x) for x in %s]" % q_plugins())
@@ -464,8 +466,24 @@ class _Act:
         return _State._live("mixer.soloTrack(%d, %r)" % (track, state))
 
     def route(self, track: int, dest: int, level: float):
-        """Включить/выключить посыл (level=0 выключает)."""
-        return _State._live("mixer.setRouteToLevel(%d, %d, %r)" % (track, dest, level))
+        """Включить/выключить посыл (track → dest).
+
+        Порядок аргументов в API FL — (получатель, источник), поэтому наружу
+        передаём привычное (track, dest), а внутрь — (dest, track).
+        """
+        if level > 0:
+            try:
+                _State._live("mixer.setRouteTo(%d, %d, True)" % (dest, track))
+            except Exception:
+                pass
+            try:
+                return _State._live("mixer.setRouteToLevel(%d, %d, %r)" % (dest, track, level))
+            except Exception:
+                return "посыл включён, уровень по умолчанию"
+        try:
+            return _State._live("mixer.setRouteToLevel(%d, %d, 0.0)" % (dest, track))
+        except Exception:
+            return _State._live("mixer.setRouteTo(%d, %d, False)" % (dest, track))
 
     def param(self, track: int, slot: int, index: int, value: float):
         return _State._live("plugins.setParamValue(%r, %d, %d, %d)"
