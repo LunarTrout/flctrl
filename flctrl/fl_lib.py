@@ -168,20 +168,27 @@ class _State:
         return out
 
     def routing(self, track: int, dests: list | None = None) -> list:
-        """Куда дорожка шлёт: список (получатель, уровень).
+        """Куда дорожка шлёт: список (получатель, активен).
 
-        Важно: в этой FL и чтение, и запись идут в порядке
-        (получатель, источник) — getRouteToLevel(dest, track).
-        Обратный порядок даёт «Index out of range», а не ошибку в данных.
+        Надёжный признак — getRouteSendActive(источник, получатель).
+        getRouteToLevel на дальних получателях отвечает «Index out of range»,
+        поэтому уровень читаем только как дополнение.
         """
         n = int(self._live("mixer.trackCount()"))
         cand = dests if dests is not None else list(range(n))
         out = []
         for d in cand:
             try:
-                lvl = float(self._live("mixer.getRouteToLevel(%d, %d)" % (int(d), track)))
+                on = int(self._live("mixer.getRouteSendActive(%d, %d)" % (track, int(d))))
             except Exception:
                 continue
+            if not on:
+                continue
+            lvl = None
+            try:
+                lvl = float(self._live("mixer.getRouteToLevel(%d, %d)" % (track, int(d))))
+            except Exception:
+                pass
             out.append((int(d), lvl))
         return out
 
@@ -466,24 +473,30 @@ class _Act:
         return _State._live("mixer.soloTrack(%d, %r)" % (track, state))
 
     def route(self, track: int, dest: int, level: float):
-        """Включить/выключить посыл (track → dest).
+        """Посыл track → dest.
 
-        Порядок аргументов в API FL — (получатель, источник), поэтому наружу
-        передаём привычное (track, dest), а внутрь — (dest, track).
+        Три правила, добытые опытом:
+        1) порядок аргументов — (источник, получатель);
+        2) FL молча не включает посыл, если уже есть обратный (защита от петли),
+           поэтому сначала снимаем dest → track;
+        3) setRouteToLevel на дальних получателях падает, работает setRouteTo.
         """
         if level > 0:
             try:
-                _State._live("mixer.setRouteTo(%d, %d, True)" % (dest, track))
+                if int(_State._live("mixer.getRouteSendActive(%d, %d)" % (dest, track))):
+                    _State._live("mixer.setRouteTo(%d, %d, False)" % (dest, track))
             except Exception:
                 pass
+            _State._live("mixer.setRouteTo(%d, %d, True)" % (track, dest))
             try:
-                return _State._live("mixer.setRouteToLevel(%d, %d, %r)" % (dest, track, level))
+                _State._live("mixer.setRouteToLevel(%d, %d, %r)" % (track, dest, level))
             except Exception:
-                return "посыл включён, уровень по умолчанию"
+                pass
+            return "включено"
         try:
-            return _State._live("mixer.setRouteToLevel(%d, %d, 0.0)" % (dest, track))
-        except Exception:
-            return _State._live("mixer.setRouteTo(%d, %d, False)" % (dest, track))
+            return _State._live("mixer.setRouteTo(%d, %d, False)" % (track, dest))
+        except Exception as e:
+            return "не вышло: %s" % str(e)[:60]
 
     def param(self, track: int, slot: int, index: int, value: float):
         return _State._live("plugins.setParamValue(%r, %d, %d, %d)"
