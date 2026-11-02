@@ -436,6 +436,16 @@ def fl_live_start(flp: str | None = None) -> dict:
 
 
 @tool
+def fl_live_attach(pid: int | None = None, flp: str | None = None) -> dict:
+    """Прицепиться к уже запущенной FL — без спавна и перезапуска проекта.
+
+    Работает с проектом, который пользователь открыл сам: стенд не закрывает
+    и не переоткрывает его. `pid=None` — найти FL64.exe автоматически.
+    """
+    return fl.create.live_attach(pid=pid, flp=flp)
+
+
+@tool
 def fl_live_stop() -> dict:
     """Закрыть стенд Frida."""
     return fl.create.live_stop()

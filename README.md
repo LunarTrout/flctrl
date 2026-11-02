@@ -124,10 +124,19 @@ fl.create.live_replace(2, 4, "Fruity Reeverb 2")
 fl.create.live_delete(2, 4)
 fl.create.live_stop()
 
+# вживую в проект, который уже открыт руками — без спавна и перезапуска
+fl.create.live_attach()                 # pid найдётся сам
+fl.create.live_insert(1, 0, r"C:\Programs\VST\FabFilter\FabFilter Pro-Q 4.dll")
+fl.create.live_slots(1)                 # проверка: слот занят
+fl.create.live_delete(1, 0)
+
 # через файл (когда живой режим недоступен)
 fl.create.plugin("...\\FabFilter Pro-Q 4.fst", 19, 0, flp="song.flp")
 fl.create.reload("song.flp")
 ```
+
+Плагин по имени ищется только в папке `Plugins\Fruity`; для VST надёжнее
+передавать полный путь к `.dll` — по имени VST не находится.
 
 ---
 

@@ -996,6 +996,29 @@ class _Create:
         _Create._LIVE = (dm, port, flp)
         return {"started": True, "pid": dm.pid, "port": port, "flp": flp}
 
+    def live_attach(self, pid: int | None = None, flp: str | None = None,
+                    port: int | None = None) -> dict:
+        """Прицепиться к УЖЕ запущенной FL — без спавна и без перезапуска.
+
+        `pid=None` — найти FL64.exe самому. Нужно, когда проект открыт руками:
+        стенд не должен его закрывать и переоткрывать.
+        """
+        try:
+            import live_create
+        except ImportError:
+            import fl_live_insert as live_create
+        if pid is None:
+            import render_job
+            pid = render_job.fl_pid()
+            if not pid:
+                raise RuntimeError("FL64.exe не запущена")
+        port = port or self.PORT
+        dm = live_create.Daemon(flp or "", port)
+        dm.attach_pid = int(pid)
+        dm.start()
+        _Create._LIVE = (dm, port, flp or "")
+        return {"attached": True, "pid": int(pid), "port": port}
+
     def live_stop(self) -> dict:
         """Закрыть стенд: отсоединиться от Frida и убрать FL."""
         if not self._LIVE:
