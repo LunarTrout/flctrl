@@ -44,11 +44,52 @@ def _call(cmd, params=None, timeout=30):
     return json.loads(buf.decode("utf-8", "replace").strip())
 
 
+def _restart_daemon(timeout: float = 60.0) -> bool:
+    """Перезапустить демон моста: он теряет связь после перезапуска FL."""
+    import subprocess
+    import time
+
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-Process fl-studio-mcp-daemon -ErrorAction SilentlyContinue |"
+             " Stop-Process -Force -ErrorAction SilentlyContinue"],
+            capture_output=True, timeout=30)
+    except Exception:
+        pass
+    try:
+        import fl_lib as fl
+        fl.link.ensure()
+    except Exception:
+        pass
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            _call("exec", {"expr": "mixer.trackCount()"}, timeout=5)
+            return True
+        except Exception:
+            time.sleep(1.0)
+    return False
+
+
 def live(expr):
-    r = _call("exec", {"expr": expr})
+    try:
+        r = _call("exec", {"expr": expr})
+    except (ConnectionRefusedError, OSError):
+        if not _restart_daemon():
+            raise
+        r = _call("exec", {"expr": expr})
     d = r.get("data") or {}
     if not d.get("ok"):
-        raise RuntimeError(str(d.get("error") or r)[:300])
+        err = str(d.get("error") or r)
+        if "FLNotRunning" in err or "not responding" in err:
+            if _restart_daemon():
+                r = _call("exec", {"expr": expr})
+                d = r.get("data") or {}
+                if d.get("ok"):
+                    return d.get("result")
+        raise RuntimeError(err[:300])
     return d.get("result")
 
 
