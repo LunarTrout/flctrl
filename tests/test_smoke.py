@@ -95,6 +95,30 @@ def main() -> int:
         check("measure", t_measure)
         check("bands", t_bands)
 
+        def t_curve():
+            r = fl.hear.curve(WAV)
+            assert r is not None, "кривая пустая"
+            n = len(r) if hasattr(r, "__len__") else None
+            assert n is None or 2 < n < 5000, "странная длина кривой: %r" % n
+
+        def t_profile():
+            r = fl.hear.profile(WAV)
+            assert isinstance(r, dict) and r, "профиль пустой"
+            print("       полей профиля: %d" % len(r))
+
+        def t_sections():
+            r = fl.hear.sections(WAV)
+            assert r is not None, "секции не посчитались"
+
+        def t_match():
+            r = fl.hear.match(WAV, WAV)
+            assert r is not None, "сопоставление не прошло"
+
+        check("curve", t_curve)
+        check("profile", t_profile)
+        check("sections", t_sections)
+        check("match (сам с собой)", t_match)
+
         print("== sim: песочница")
         def t_sim_identity():
             x, fs = fl.sim.load(WAV, 0, 5)
