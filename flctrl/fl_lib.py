@@ -847,6 +847,47 @@ class _Act:
         self._persist()
         return {"written": written, "gap_s": gap, "stopped": bool(stop_transport)}
 
+    def param_live(self, track: int, slot: int, index: int, value: float,
+                   verify: bool = True, dry_run: bool = False) -> dict:
+        """Записать ОДИН параметр, не останавливая транспорт.
+
+        Отличие от param_batch: не трогает воспроизведение — для живой работы.
+        Проверяет результат чтением и, если значение не встало, повторяет раз.
+        dry_run ничего не пишет: возвращает, что было бы записано.
+        """
+        import time as _time
+        expr_before = "plugins.getParamValue(%d, %d, %d)" % (index, track, slot)
+        try:
+            before = float(_State._live(expr_before))
+        except Exception:
+            before = None
+        if dry_run:
+            return {"dry_run": True, "track": track, "slot": slot,
+                    "index": index, "value": value, "before": before}
+        t0 = _time.perf_counter()
+        _State._live("plugins.setParamValue(%r, %d, %d, %d)"
+                     % (value, index, track, slot))
+        latency = round((_time.perf_counter() - t0) * 1000, 1)
+        after = None
+        ok = True
+        if verify:
+            _time.sleep(0.08)
+            for _attempt in range(2):
+                try:
+                    after = float(_State._live(expr_before))
+                except Exception:
+                    after = None
+                    break
+                if after is not None and abs(after - value) < 0.02:
+                    break
+                _State._live("plugins.setParamValue(%r, %d, %d, %d)"
+                             % (value, index, track, slot))
+                _time.sleep(0.10)
+            ok = after is not None and abs(after - value) < 0.02
+        return {"ok": ok, "track": track, "slot": slot, "index": index,
+                "before": before, "after": after, "value": value,
+                "latency_ms": latency}
+
     def params(self, track: int, slot: int):
         return _State._live(
             "__import__('json').dumps([{'i': i, 'name': str(plugins.getParamName(i, %d, %d)),"

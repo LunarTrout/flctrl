@@ -473,6 +473,18 @@ def fl_set_param(track: int, slot: int, index: int, value: float) -> dict:
 
 
 @tool
+def fl_set_param_live(track: int, slot: int, index: int, value: float,
+                      dry_run: bool = False) -> dict:
+    """Поставить одну ручку, НЕ останавливая воспроизведение, и проверить чтением.
+
+    Для живой работы: транспорт не трогается, значение перечитывается, при
+    расхождении запись повторяется один раз. dry_run=true — показать, что было
+    бы записано, ничего не меняя.
+    """
+    return fl.act.param_live(track, slot, index, value, dry_run=dry_run)
+
+
+@tool
 def fl_set_params(track: int, slot: int, values: dict, gap: float = 0.12) -> dict:
     """Записать пачку параметров плагина безопасно (с паузами и стопом).
 
