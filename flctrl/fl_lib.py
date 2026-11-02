@@ -254,26 +254,57 @@ class _State:
     def health(self) -> dict:
         """Живо ли управление и что именно не так. Не бросает исключение."""
         import subprocess
-        out = {"fl_running": False, "bridge": False, "tracks": None, "hint": ""}
+        import time
+        out = {"fl_running": False, "bridge": False, "tracks": None,
+               "latency_ms": None, "pid": None, "project": None,
+               "live_stand": False, "hint": ""}
         try:
-            r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq FL64.exe"],
+            r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq FL64.exe", "/FO", "CSV"],
                                capture_output=True, timeout=20)
-            out["fl_running"] = b"FL64.exe" in (r.stdout or b"")
+            txt = (r.stdout or b"").decode("cp866", "replace")
+            for line in txt.splitlines():
+                parts = [p.strip('"') for p in line.split('","')]
+                if len(parts) > 1 and parts[0].lower().startswith("fl64"):
+                    out["fl_running"] = True
+                    out["pid"] = int(parts[1])
+                    break
         except Exception:
             pass
+        if out["fl_running"]:
+            try:
+                import render_job
+                out["project"] = render_job.window_title()
+            except Exception:
+                pass
         try:
+            t0 = time.perf_counter()
             out["tracks"] = int(self._live("mixer.trackCount()"))
+            out["latency_ms"] = round((time.perf_counter() - t0) * 1000, 1)
             out["bridge"] = True
         except Exception as e:
             out["hint"] = str(e)[:200]
+        try:
+            import fl_lib as _fl
+            out["live_stand"] = bool(getattr(_fl._Create, "_LIVE", None))
+        except Exception:
+            pass
         if not out["fl_running"]:
             out["hint"] = "FL Studio не запущена"
         elif not out["bridge"]:
-            out["hint"] = ("FL запущена, но контроллер не отвечает. "
-                           "F10 -> MIDI settings -> Update MIDI scripts -> OK. "
-                           "Обычно причина в принудительном закрытии FL: "
-                           "настройки MIDI сохраняются только при нормальном выходе.")
+            out["hint"] = (
+                "FL запущена, но контроллер не отвечает. "
+                "F10 -> MIDI settings -> Update MIDI scripts -> OK. "
+                "Обычно причина в принудительном закрытии FL: "
+                "настройки MIDI сохраняются только при нормальном выходе.")
         return out
+
+    def ping(self) -> dict:
+        """Быстрая проверка отклика моста с замером задержки."""
+        import time
+        t0 = time.perf_counter()
+        v = self._live("mixer.trackCount()")
+        return {"ok": True, "tracks": int(v),
+                "latency_ms": round((time.perf_counter() - t0) * 1000, 1)}
 
     def channels(self, chunk: int = 6):
         """Каналы рэка. Кусками: длинные выражения транспорт режет."""

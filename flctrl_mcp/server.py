@@ -257,8 +257,14 @@ def fl_drums_balance(path: str, a: float = 0.0, dur: float = 30.0) -> dict:
 
 @tool
 def fl_health() -> dict:
-    """Живо ли управление: запущена ли FL, отвечает ли контроллер, сколько дорожек."""
+    """Живо ли управление: FL, контроллер, дорожки, задержка, проект, стенд."""
     return fl.state.health()
+
+
+@tool
+def fl_ping() -> dict:
+    """Быстрый отклик моста с задержкой в миллисекундах (для проверки живости)."""
+    return fl.state.ping()
 
 
 @tool
