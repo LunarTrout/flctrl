@@ -152,37 +152,84 @@ def analyze(stems: dict[str, str], a: float | None = None, b: float | None = Non
     return out
 
 
-def advice(map_: dict, ref_width: float | None = None,
-           max_step: float = 0.25) -> list[dict]:
-    """Что двигать: по роли, по полосам, с учётом занятости поля.
+def overlap(map_: dict, a_name: str, b_name: str) -> float:
+    """Спектральное перекрытие двух ролей: 0 — не пересекаются, 1 — одно и то же.
 
-    Правила не «всё шире»:
-    * низ (до 120 Гц) держим в центре — иначе теряется моно и бочка;
-    * если роль статична и делит полосу с другой — предложить движение
-      по секциям, а не просто сдвиг;
-    * если верх роли уже референса — расширять, но не выше max_step за шаг.
+    Считается по распределению энергии по полосам. Именно перекрытие, а не
+    «ширина вообще», оправдывает разведение по панораме.
+    """
+    a = (map_.get("stems") or {}).get(a_name, {}).get("bands")
+    b = (map_.get("stems") or {}).get(b_name, {}).get("bands")
+    if not a or not b:
+        return 0.0
+    va = np.array([x["energy"] for x in a])
+    vb = np.array([x["energy"] for x in b])
+    va = va / (va.sum() + 1e-30)
+    vb = vb / (vb.sum() + 1e-30)
+    return float(np.minimum(va, vb).sum())
+
+
+def advice(map_: dict, ref_width: float | None = None,
+           max_step: float = 0.25, overlap_min: float = 0.25) -> list[dict]:
+    """Что двигать — только там, где это оправдано измерением.
+
+    Правила выведены из чисел, а не из вкуса:
+    * низ (<120 Гц) держим в центре: иначе теряется моно и разъезжается бочка;
+    * роль двигаем по секциям, только если её панорама статична И она
+      спектрально перекрывается с другой ролью (overlap >= overlap_min);
+    * расширяем верх, только если он реально уже референсного коридора.
+    Нет перекрытия и нет дефицита ширины — предложения нет.
     """
     tips = []
-    for name, prof in (map_.get("stems") or {}).items():
-        if "bands" not in prof:
-            continue
+    stems = map_.get("stems") or {}
+    names = [n for n, p in stems.items() if "bands" in p]
+
+    for name in names:
+        prof = stems[name]
         low = [b for b in prof["bands"] if b["fc"] < 120]
-        top = [b for b in prof["bands"] if b["fc"] > 6000]
-        if low and abs(np.mean([b["pan"] for b in low])) > 0.15:
+        total_e = sum(b["energy"] for b in prof["bands"]) or 1e-30
+        low_share = sum(b["energy"] for b in low) / total_e if low else 0.0
+        # низ — только если он реально есть в роли, иначе это шум пустой полосы
+        if low and low_share >= 0.03 and abs(np.mean([b["pan"] for b in low])) > 0.15:
             tips.append({"stem": name, "kind": "center_low",
-                         "why": "низ уведён в сторону: %.2f" %
-                                float(np.mean([b["pan"] for b in low])),
-                         "action": "вернуть низ в центр до ±0.15"})
-        if prof.get("static") and len(prof.get("sections") or []) >= 3:
+                         "why": "низ уведён в сторону: %.2f (доля низа %.1f%%)" %
+                                (float(np.mean([b["pan"] for b in low])), 100 * low_share),
+                         "action": "вернуть низ в центр до ±0.15",
+                         "evidence": {"low_pan": float(np.mean([b["pan"] for b in low])),
+                                      "low_share": round(low_share, 3)}})
+        if not prof.get("static") or len(prof.get("sections") or []) < 3:
+            continue
+        # низовые/центральные роли (бочка, бас) не двигаем: их место — центр.
+        # Это не ярлык, а измерение: больше половины энергии ниже 200 Гц.
+        lowdom = sum(b["energy"] for b in prof["bands"] if b["fc"] < 200) / total_e
+        if lowdom > 0.5:
+            continue
+        # статичность сама по себе — не повод двигать; нужен партнёр по перекрытию
+        partners = []
+        for other in names:
+            if other == name:
+                continue
+            ov = overlap(map_, name, other)
+            if ov >= overlap_min:
+                partners.append((other, ov))
+        if partners:
+            other, ov = max(partners, key=lambda kv: kv[1])
             tips.append({"stem": name, "kind": "movement",
-                         "why": "панорама не меняется по секциям",
-                         "action": "задать движение между секциями (шаг до %.2f)" % max_step})
-        if ref_width and top:
+                         "why": "панорама статична, перекрытие с %s %.2f" % (other, ov),
+                         "action": "развести по секциям с %s (шаг до %.2f)" % (other, max_step),
+                         "evidence": {"overlap": round(ov, 3), "with": other}})
+
+    if ref_width:
+        for name in names:
+            top = [b for b in stems[name]["bands"] if b["fc"] > 6000]
+            if not top:
+                continue
             w = float(np.mean([b["width"] for b in top]))
             if w < ref_width - 0.1:
                 tips.append({"stem": name, "kind": "widen_top",
                              "why": "верх уже референса: %.2f против %.2f" % (w, ref_width),
-                             "action": "расширить верх (стерео-EQ/дубль), шаг до %.2f" % max_step})
+                             "action": "расширить верх (стерео-EQ/дубль), шаг до %.2f" % max_step,
+                             "evidence": {"width_top": round(w, 3), "ref": ref_width}})
     return tips
 
 
