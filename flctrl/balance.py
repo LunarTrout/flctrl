@@ -78,13 +78,19 @@ def project(mapping: dict[str, Any], mix_path: str | None = None,
 
 
 def build(refs_dir: str, out: str | None = None, max_tracks: int | None = None) -> dict:
-    """Собрать модель по папкам <track>/{drums,bass,other,vocals}.wav."""
+    """Собрать модель по папкам <track>/{drums,bass,other,vocals}.wav.
+
+    Храним НЕ только медианы: каждая запись корпуса остаётся отдельной строкой.
+    Так цель для нового проекта можно считать как взвешенную смесь ближайших
+    референсов, а не как один усреднённый профиль.
+    """
     import targets as T
 
     tracks = list(T._iter_tracks(refs_dir))
     if max_tracks:
         tracks = tracks[:max_tracks]
     per_role: dict[str, list[dict]] = {}
+    rows: list[dict] = []
     used = []
     for name, files in tracks:
         try:
@@ -93,10 +99,11 @@ def build(refs_dir: str, out: str | None = None, max_tracks: int | None = None) 
             print("пропуск %s: %s" % (name, str(exc)[:100]))
             continue
         used.append(name)
+        rows.append({"track": name, "roles": vec["roles"]})
         for role, v in vec["roles"].items():
             per_role.setdefault(role, []).append(v)
 
-    model: dict[str, Any] = {"tracks": used, "roles": {}}
+    model: dict[str, Any] = {"tracks": used, "roles": {}, "rows": rows}
     for role, items in per_role.items():
         aud = [it["audib"] for it in items]
         shr = [it["share_pct"] for it in items]
@@ -132,64 +139,119 @@ def _target_share(model: dict, role: str) -> float | None:
     return float(e["share_pct"]["median"])
 
 
+def targets_for(vec: dict, model: dict, k: int = 3, temp: float = 0.12) -> dict:
+    """Цель как смесь ближайших референсов, а не медиана по всем.
+
+    Смысл: у корпуса разные школы сведения. Если наш материал по балансу ближе
+    к двум-трём из них, среднее по всем шести размазывает цель и просит правки,
+    которых не хочет ни один живой микс. Поэтому берём k ближайших и смешиваем
+    их с весами по расстоянию (softmax), а имя каждого источника возвращаем —
+    чтобы было видно, НА КОГО мы равняемся.
+    """
+    rows = model.get("rows") or []
+    roles = model.get("roles") or {}
+    if not rows:
+        return {"roles": {r: {"audib": e["audib"]["median"],
+                              "share_pct": e["share_pct"]["median"]}
+                          for r, e in roles.items()},
+                "from": [], "mode": "median"}
+
+    def dist(row: dict) -> float:
+        common = [r for r in vec.get("roles", {}) if r in (row.get("roles") or {})]
+        if not common:
+            return 9.9
+        d = [abs(vec["roles"][r]["audib"] - row["roles"][r]["audib"]) for r in common]
+        s = [abs(vec["roles"][r]["share_pct"] - row["roles"][r]["share_pct"]) / 100.0
+             for r in common]
+        return float(np.mean(d) + 0.5 * np.mean(s))
+
+    scored = sorted(((dist(r), r) for r in rows), key=lambda x: x[0])[:max(1, k)]
+    dmin = scored[0][0]
+    weights = [float(np.exp(-(d - dmin) / max(temp, 1e-3))) for d, _ in scored]
+    total = sum(weights) or 1.0
+    weights = [w / total for w in weights]
+
+    out_roles: dict[str, dict] = {}
+    for role in roles:
+        vals, wsum = [], 0.0
+        for (d, row), w in zip(scored, weights):
+            rv = (row.get("roles") or {}).get(role)
+            if not rv:
+                continue
+            vals.append((rv["audib"], rv["share_pct"], w))
+            wsum += w
+        if not vals or wsum <= 0:
+            continue
+        out_roles[role] = {
+            "audib": sum(v[0] * v[2] for v in vals) / wsum,
+            "share_pct": sum(v[1] * v[2] for v in vals) / wsum,
+        }
+    return {"roles": out_roles,
+            "from": [{"track": row["track"], "weight": round(w, 3),
+                      "distance": round(d, 3)}
+                     for (d, row), w in zip(scored, weights)],
+            "mode": "ensemble"}
+
+
 def solve(vec: dict, model: dict, cap_db: float = 6.0,
-          deadband: float = 0.05) -> dict:
+          deadband: float = 0.05, k: int = 3) -> dict:
     """Каким ролям и на сколько дБ двинуть фейдер.
 
-    Дефицит слышимости переводится в дБ через ИЗМЕРЕННУЮ чувствительность
-    dN/dB этого проекта (не среднюю по корпусу). Доля частичной громкости
-    используется как второй признак: если она сильно ниже цели при нормальной
-    A — роль маскируется, и одним фейдером это не лечится.
+    Цели берутся из ансамбля ближайших референсов (`targets_for`). Дефицит
+    слышимости переводится в дБ через ИЗМЕРЕННУЮ чувствительность dN/dB этого
+    проекта (не среднюю по корпусу). Доля частичной громкости — второй признак:
+    если она сильно ниже цели при нормальной A, роль маскируется, и одним
+    фейдером это не лечится.
     """
+    tgt = targets_for(vec, model, k=k)
     moves = []
     for role, mine in (vec.get("roles") or {}).items():
-        tgt_a = _target_audib(model, role)
-        tgt_s = _target_share(model, role)
-        if tgt_a is None:
+        t = tgt["roles"].get(role)
+        if not t:
             continue
+        tgt_a, tgt_s = t["audib"], t["share_pct"]
         d_a = tgt_a - mine["audib"]
         sens = mine.get("dN_per_db") or 0.0
         pred_db = None
         if sens > 1e-6 and mine["N_partial"] > 1e-6:
             need_n = (tgt_a * mine["N_solo"]) - mine["N_partial"]
             pred_db = need_n / sens
-        if abs(d_a) < deadband and (tgt_s is None or abs(tgt_s - mine["share_pct"]) < 2.0):
+        if abs(d_a) < deadband and abs(tgt_s - mine["share_pct"]) < 2.0:
             continue
-        if pred_db is None:
-            db = 0.0
-        else:
-            db = float(np.clip(pred_db, -cap_db, cap_db))
-        masked = tgt_s is not None and (tgt_s - mine["share_pct"]) > 4.0 and abs(d_a) < 0.1
+        db = float(np.clip(pred_db, -cap_db, cap_db)) if pred_db is not None else 0.0
+        masked = (tgt_s - mine["share_pct"]) > 4.0 and abs(d_a) < 0.1
         moves.append({
             "role": role,
             "db": round(db, 1),
             "audib": round(mine["audib"], 3),
             "target_audib": round(tgt_a, 3),
             "share_pct": round(mine["share_pct"], 1),
-            "target_share": round(tgt_s, 1) if tgt_s is not None else None,
+            "target_share": round(tgt_s, 1),
             "why": ("маскируется: слышимость в норме, а доля низкая — нужен EQ/панорама"
                     if masked else "дефицит слышимости"),
         })
     moves.sort(key=lambda m: abs(m["db"]), reverse=True)
-    return {"moves": moves, "cap_db": cap_db}
+    return {"moves": moves, "cap_db": cap_db, "from": tgt["from"],
+            "mode": tgt["mode"]}
 
 
 def check(before: dict, after: dict, model: dict) -> dict:
     """Приёмка: стало ли ближе к модели по слышимости и доле."""
+    tgt = targets_for(before, model)
     rows = []
     for role, b in (before.get("roles") or {}).items():
         a = (after.get("roles") or {}).get(role)
-        if not a:
+        t = tgt["roles"].get(role)
+        if not a or not t:
             continue
-        tgt_a = _target_audib(model, role)
-        tgt_s = _target_share(model, role)
+        tgt_a, tgt_s = t["audib"], t["share_pct"]
         rows.append({
             "role": role,
             "d_audib": round(a["audib"] - b["audib"], 3),
-            "err_before": round(abs(b["audib"] - tgt_a), 3) if tgt_a is not None else None,
-            "err_after": round(abs(a["audib"] - tgt_a), 3) if tgt_a is not None else None,
-            "err_share_before": round(abs(b["share_pct"] - tgt_s), 1) if tgt_s is not None else None,
-            "err_share_after": round(abs(a["share_pct"] - tgt_s), 1) if tgt_s is not None else None,
+            "err_before": round(abs(b["audib"] - tgt_a), 3),
+            "err_after": round(abs(a["audib"] - tgt_a), 3),
+            "err_share_before": round(abs(b["share_pct"] - tgt_s), 1),
+            "err_share_after": round(abs(a["share_pct"] - tgt_s), 1),
         })
     better = [r for r in rows if r["err_after"] is not None
               and r["err_before"] is not None and r["err_after"] < r["err_before"]]
