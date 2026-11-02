@@ -377,17 +377,16 @@ class _Hear:
         return L.measure(path, section=sec, stem_path=stem)
 
     def curve(self, path: str, a: float | None = None, b: float | None = None):
-        import listen_layer as L
-        sec = (a, b) if a is not None and b is not None else None
-        return L.curve(path, sec)
+        args = [path]
+        if a is not None and b is not None:
+            args += ["--a", str(a), "--b", str(b)]
+        return _hear_cli("curve", *args)
 
     def profile(self, path: str):
-        import profile_cache as P
-        return P.build(path)
+        return _hear_cli("profile", path)
 
     def bands(self, path: str):
-        import bandprofile as B
-        return B.band_axes(path)
+        return _hear_cli("bands", path)
 
     def masking(self, stems: dict, a: float | None = None, b: float | None = None,
                 mix_path: str | None = None):
@@ -432,8 +431,7 @@ class _Hear:
 
     def match(self, path_a: str, path_b: str, min_len: float = 8.0):
         """Сопоставить однотипные секции двух файлов по громкости."""
-        import listen_layer as L
-        return L.match_sections(path_a, path_b, min_len)
+        return _hear_cli("match", path_a, path_b)
 
     def psycho_full(self, path: str, a: float | None = None, b: float | None = None,
                     which=("roughness", "tonality", "fluctuation")):
@@ -517,12 +515,20 @@ class _Hear:
         return self.measure(path)
 
     def compare(self, path: str, refs: list, a=None, b=None):
-        import listen_layer as L
-        from brief import flatten
-        sec = (a, b) if a is not None and b is not None else None
-        mine = flatten(L.measure(path, section=sec))
-        rs = [flatten(L.measure(r, section=sec)) for r in refs]
-        return L.corridor(mine, rs)
+        """Коридор: где наш файл относительно набора референсов."""
+        import json as _json
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            _json.dump(list(refs), f, ensure_ascii=False)
+            tmp = f.name
+        try:
+            return _hear_cli("compare", path, tmp)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------- act
@@ -792,8 +798,19 @@ class _Sim:
         return S.run(x, fs, ops)
 
     def compare(self, x, y, fs: int, offset_db: float = 0.0):
-        import sandbox as S
-        return S.compare(x, y, fs, offset_db)
+        """Сравнить два массива через слой слуха (он живёт в другом окружении).
+
+        sandbox.compare требует phonometry в текущем процессе, поэтому массивы
+        пишутся во временные wav и меряются тем же CLI, что и файлы.
+        """
+        import tempfile
+        import soundfile as sf
+        with tempfile.TemporaryDirectory(prefix="flctrl_sim_") as tmp:
+            pa = os.path.join(tmp, "a.wav")
+            pb = os.path.join(tmp, "b.wav")
+            sf.write(pa, x, fs)
+            sf.write(pb, y, fs)
+            return hear.measure(pa), hear.measure(pb)
 
     def delta(self, before: dict, after: dict) -> list:
         import sandbox as S

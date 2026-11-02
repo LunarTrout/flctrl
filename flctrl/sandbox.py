@@ -26,7 +26,10 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import listen_layer as L  # noqa: E402
+try:  # слух нужен только для сравнения; обработка работает и без phonometry
+    import listen_layer as L  # noqa: E402
+except Exception:  # pragma: no cover
+    L = None
 
 
 # --------------------------------------------------------------- примитивы

@@ -44,22 +44,32 @@ def main(argv=None) -> int:
         print(__doc__)
         return 2
     cmd, args = argv[0], argv[1:]
-    import fl_lib as fl
+    # этот CLI вызывается из fl_lib в окружении без phonometry, поэтому
+    # слуховые команды обязаны идти в listen_layer напрямую: через fl.hear.*
+    # они бы снова звали этот же CLI и падали на проверке окружения
+    import listen_layer as L
 
     if cmd == "measure":
         path = args[0]
         a = float(args[args.index("--a") + 1]) if "--a" in args else 0.0
         b = float(args[args.index("--b") + 1]) if "--b" in args else 30.0
-        _out(fl.hear.measure(path, a, b))
+        _out(L.measure(path, (a, b)))
         return 0
     if cmd == "bands":
-        _out(fl.hear.bands(args[0]))
+        import bandprofile as B
+        _out(B.band_axes(args[0]))
         return 0
     if cmd == "profile":
-        _out(fl.hear.profile(args[0]))
+        import profile_cache as P
+        _out(P.build(args[0]))
+        return 0
+    if cmd == "curve":
+        a = float(args[args.index("--a") + 1]) if "--a" in args else None
+        b = float(args[args.index("--b") + 1]) if "--b" in args else None
+        _out(L.curve(args[0], (a, b) if a is not None and b is not None else None))
         return 0
     if cmd == "sections":
-        _out(fl.hear.sections(args[0]))
+        _out(L.sections(args[0]))
         return 0
     if cmd == "masking":
         # напрямую в listen_layer: через fl.hear.masking была бы рекурсия,
@@ -67,6 +77,18 @@ def main(argv=None) -> int:
         import listen_layer as L
         stems = json.loads(open(args[1], encoding="utf-8").read()) if len(args) > 1 else {}
         _out(L.masking(stems, mix_path=args[0]))
+        return 0
+    if cmd == "match":
+        import listen_layer as L
+        _out(L.match_sections(args[0], args[1]))
+        return 0
+    if cmd == "compare":
+        import listen_layer as L
+        from brief import flatten
+        refs = json.loads(open(args[1], encoding="utf-8").read())
+        mine = flatten(L.measure(args[0]))
+        rs = [flatten(L.measure(r)) for r in refs]
+        _out(L.corridor(mine, rs))
         return 0
     if cmd == "psycho":
         import listen_layer as L
@@ -76,9 +98,11 @@ def main(argv=None) -> int:
         _out(L.psycho(path, section=(a, b) if a is not None and b is not None else None))
         return 0
     if cmd == "describe":
+        import fl_lib as fl
         _out(fl.hear.describe(args[0]))
         return 0
     if cmd == "nearest":
+        import fl_lib as fl
         paths = json.loads(args[1]) if len(args) > 1 else []
         _out(fl.hear.nearest(args[0], paths))
         return 0
