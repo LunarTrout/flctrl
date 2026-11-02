@@ -389,14 +389,38 @@ class _Hear:
 
     def masking(self, stems: dict, a: float | None = None, b: float | None = None,
                 mix_path: str | None = None):
-        """Кто кого забивает: доли и задавленные полосы по стемам."""
-        import listen_layer as L
-        sec = (a, b) if a is not None and b is not None else None
-        return L.masking(stems, section=sec, mix_path=mix_path)
+        """Кто кого забивает: доли и задавленные полосы по стемам.
+
+        Считается в окружении со phonometry (3.13): в основном процессе его нет,
+        поэтому напрямую звать listen_layer нельзя.
+        """
+        if a is not None and b is not None:
+            stems = dict(stems)
+        if mix_path is None:
+            raise ValueError("нужен mix_path: по нему берётся калибровка")
+        import json as _json
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            _json.dump(stems, f, ensure_ascii=False)
+            stems_path = f.name
+        try:
+            return _hear_cli("masking", mix_path, stems_path)
+        finally:
+            try:
+                os.unlink(stems_path)
+            except OSError:
+                pass
+
+    def psycho(self, path: str, a: float | None = None, b: float | None = None):
+        """Шероховатость, тональность, флуктуация (ECMA-418-2)."""
+        args = [path]
+        if a is not None and b is not None:
+            args += ["--a", str(a), "--b", str(b)]
+        return _hear_cli("psycho", *args)
 
     def sections(self, path: str, min_len: float = 8.0):
-        import listen_layer as L
-        return L.sections(path, min_len)
+        return _hear_cli("sections", path)
 
     def unmask(self, stems: dict, masker: str, masked: str,
                *args, **kwargs) -> dict:
@@ -409,16 +433,26 @@ class _Hear:
         import listen_layer as L
         return L.match_sections(path_a, path_b, min_len)
 
-    def psycho(self, path: str, a: float | None = None, b: float | None = None,
-               which=("roughness", "tonality", "fluctuation")):
-        """ECMA-418-2: roughness (с полосами), tonality (с полосами), fluctuation.
-
-        Медленно по своей природе (~4.5× реального времени) — для точечных
-        проверок, а не для потока.
-        """
-        import listen_layer as L
-        sec = (a, b) if a is not None and b is not None else None
-        return L.psycho(path, sec, which)
+    def psycho_full(self, path: str, a: float | None = None, b: float | None = None,
+                    which=("roughness", "tonality", "fluctuation")):
+        """ECMA-418-2 с разбивкой по полосам (полная версия, медленная)."""
+        import subprocess
+        py = os.environ.get("FLCTRL_PY_HEAR") or os.path.join(
+            os.path.dirname(HERE), ".venv313", "Scripts", "python.exe")
+        code = ("import json,listen_layer as L,sys;"
+                "print(json.dumps(L.psycho(sys.argv[1],"
+                "(float(sys.argv[2]),float(sys.argv[3])) if len(sys.argv)>3 else None,"
+                "tuple(sys.argv[4].split(',')) if len(sys.argv)>4 else ('roughness','tonality','fluctuation'))))")
+        args = [py, "-c", code, path]
+        if a is not None and b is not None:
+            args += [str(a), str(b)]
+        args += [",".join(which)]
+        p = subprocess.run(args, capture_output=True, text=True, timeout=1800,
+                           cwd=HERE)
+        if not (p.stdout or "").strip():
+            raise RuntimeError((p.stderr or "")[-300:])
+        import json as _json
+        return _json.loads(p.stdout.strip().splitlines()[-1])
 
     def _py312(self) -> str:
         return os.path.join(os.path.dirname(HERE), ".venv312", "Scripts", "python.exe")

@@ -41,9 +41,19 @@ def hear_python() -> str:
     if env and os.path.exists(env):
         return env
     root = os.path.dirname(package_dir())
+    bases = [root, os.path.dirname(root), os.getcwd()]
+    # окружение часто живёт в соседней рабочей папке (fl-studio-mcp/.venv313)
+    parent = os.path.dirname(root)
+    try:
+        for name in sorted(os.listdir(parent)):
+            candidate = os.path.join(parent, name)
+            if os.path.isdir(candidate) and candidate != root:
+                bases.append(candidate)
+    except OSError:
+        pass
     cands = []
-    for base in (root, os.path.dirname(root), os.getcwd()):
-        for tag in (".venv313", ".venv", "venv"):
+    for base in bases:
+        for tag in (".venv313", ".venv312", ".venv", "venv"):
             cands.append(_venv_python(base, tag))
     found = _first(cands)
     if found and found != sys.executable:

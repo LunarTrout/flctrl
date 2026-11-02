@@ -62,8 +62,18 @@ def main(argv=None) -> int:
         _out(fl.hear.sections(args[0]))
         return 0
     if cmd == "masking":
-        stems = json.loads(args[1]) if len(args) > 1 and os.path.exists(args[1]) else {}
-        _out(fl.hear.masking(stems, mix_path=args[0]))
+        # напрямую в listen_layer: через fl.hear.masking была бы рекурсия,
+        # потому что тот сам запускает этот CLI
+        import listen_layer as L
+        stems = json.loads(open(args[1], encoding="utf-8").read()) if len(args) > 1 else {}
+        _out(L.masking(stems, mix_path=args[0]))
+        return 0
+    if cmd == "psycho":
+        import listen_layer as L
+        path = args[0]
+        a = float(args[args.index("--a") + 1]) if "--a" in args else None
+        b = float(args[args.index("--b") + 1]) if "--b" in args else None
+        _out(L.psycho(path, section=(a, b) if a is not None and b is not None else None))
         return 0
     if cmd == "describe":
         _out(fl.hear.describe(args[0]))
