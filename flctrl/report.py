@@ -74,6 +74,14 @@ def _derive_actions(res: dict) -> list[str]:
             actions.append("провал на %.0f с: полоса %d Гц упала на %.1f дБ — "
                            "проверить, что там играет" % (h["t"], h["band"], h["drop_db"]))
 
+    tr = res.get("transients") or {}
+    if tr.get("compare", {}).get("ok"):
+        c = tr["compare"]
+        for v in c.get("verdict", [])[:3]:
+            actions.append("транзиенты — %s" % v)
+        actions.append("плотность ударов %.1f/с против %.1f/с у референсов" % (
+            c.get("onsets_s") or 0, c.get("ref_onsets_s") or 0))
+
     dec = res.get("decisions") or {}
     for e in (dec.get("edits") or [])[:6]:
         actions.append("%s, «%s», %.0f–%.0f с: %+.1f дБ (наш %s, цель %s)%s" % (
@@ -220,6 +228,32 @@ def to_markdown(rep: dict) -> str:
         else:
             lines.append("Провалов по полосам нет: каждая полоса держится "
                          "в пределах 8 дБ от своей медианы.")
+
+    tr = res.get("transients")
+    if tr and tr.get("compare", {}).get("ok"):
+        c = tr["compare"]
+        lines.append("")
+        lines.append("## Транзиенты: атака и удар/хвост")
+        lines.append("")
+        lines.append("Плотность ударов **%.1f/с** (референсы %.1f/с)." % (
+            c.get("onsets_s") or 0, c.get("ref_onsets_s") or 0))
+        lines.append("")
+        lines.append("| полоса | наш удар/хвост, дБ | референсы, дБ | разница | атака, мс |")
+        lines.append("|---|---|---|---|---|")
+        for r in c["rows"]:
+            lines.append("| %s | %s | %s | %s | %s |" % (
+                r["band"],
+                "-" if r["mine"] is None else "%.2f" % r["mine"],
+                "-" if r["ref"] is None else "%.2f" % r["ref"],
+                "-" if r["delta"] is None else "%+.2f" % r["delta"],
+                "-" if not r.get("attack_ms") else "%.1f" % r["attack_ms"]))
+        if c.get("verdict"):
+            lines.append("")
+            for v in c["verdict"]:
+                lines.append("- %s" % v)
+        else:
+            lines.append("")
+            lines.append("Атака в коридоре референсов по всем полосам.")
 
     sp = res.get("speech")
     if sp:

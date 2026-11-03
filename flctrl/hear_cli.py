@@ -135,6 +135,19 @@ def main(argv=None) -> int:
         rs = [audit.measure(r, a, b) for r in refs]
         _out(audit.audit(m, rs))
         return 0
+    if cmd == "transients":
+        import transients
+
+        refs = []
+        if len(args) > 1:
+            raw = args[1]
+            refs = (json.loads(raw) if raw.lstrip().startswith("[")
+                    else json.loads(open(raw, encoding="utf-8").read()))
+        lim = float(args[args.index("--seconds") + 1]) if "--seconds" in args else 45.0
+        m = transients.analyse(args[0], max_seconds=lim)
+        rs = [transients.analyse(r, max_seconds=lim) for r in refs]
+        _out(transients.compare(m, rs))
+        return 0
     if cmd == "seccomp":
         import seccomp
 

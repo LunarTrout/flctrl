@@ -1,0 +1,140 @@
+[
+ {
+  "ok": true,
+  "seconds": 45.0,
+  "onsets_s": 5.09,
+  "flux_mean": 82.8643317664609,
+  "bands": {
+   "low": {
+    "attack_ms": 41.75,
+    "ts_db": -0.32,
+    "n": 227
+   },
+   "mid": {
+    "attack_ms": 52.4,
+    "ts_db": -0.15,
+    "n": 227
+   },
+   "high": {
+    "attack_ms": 21.92,
+    "ts_db": 0.02,
+    "n": 227
+   }
+  }
+ },
+ {
+  "ok": true,
+  "seconds": 45.0,
+  "onsets_s": 0.73,
+  "flux_mean": 48.47563554643109,
+  "bands": {
+   "low": {
+    "attack_ms": 33.73,
+    "ts_db": -0.54,
+    "n": 32
+   },
+   "mid": {
+    "attack_ms": 30.04,
+    "ts_db": -0.08,
+    "n": 32
+   },
+   "high": {
+    "attack_ms": 22.39,
+    "ts_db": -0.43,
+    "n": 32
+   }
+  }
+ },
+ {
+  "ok": true,
+  "seconds": 45.0,
+  "onsets_s": 1.2,
+  "flux_mean": 64.96861492383715,
+  "bands": {
+   "low": {
+    "attack_ms": 39.55,
+    "ts_db": 0.05,
+    "n": 54
+   },
+   "mid": {
+    "attack_ms": 51.89,
+    "ts_db": -0.15,
+    "n": 54
+   },
+   "high": {
+    "attack_ms": 21.28,
+    "ts_db": -0.15,
+    "n": 54
+   }
+  }
+ },
+ {
+  "ok": true,
+  "seconds": 45.0,
+  "onsets_s": 4.11,
+  "flux_mean": 77.47115997934945,
+  "bands": {
+   "low": {
+    "attack_ms": 53.71,
+    "ts_db": -1.51,
+    "n": 184
+   },
+   "mid": {
+    "attack_ms": 43.7,
+    "ts_db": -0.11,
+    "n": 184
+   },
+   "high": {
+    "attack_ms": 22.29,
+    "ts_db": -0.13,
+    "n": 184
+   }
+  }
+ },
+ {
+  "ok": true,
+  "seconds": 45.0,
+  "onsets_s": 1.16,
+  "flux_mean": 13.584745269995926,
+  "bands": {
+   "low": {
+    "attack_ms": 42.77,
+    "ts_db": 0.47,
+    "n": 51
+   },
+   "mid": {
+    "attack_ms": 18.94,
+    "ts_db": 0.05,
+    "n": 51
+   },
+   "high": {
+    "attack_ms": 55.31,
+    "ts_db": -0.38,
+    "n": 51
+   }
+  }
+ },
+ {
+  "ok": true,
+  "seconds": 45.0,
+  "onsets_s": 4.91,
+  "flux_mean": 70.36872058303035,
+  "bands": {
+   "low": {
+    "attack_ms": 51.17,
+    "ts_db": -0.94,
+    "n": 219
+   },
+   "mid": {
+    "attack_ms": 78.27,
+    "ts_db": -0.53,
+    "n": 219
+   },
+   "high": {
+    "attack_ms": 22.67,
+    "ts_db": -0.35,
+    "n": 219
+   }
+  }
+ }
+]

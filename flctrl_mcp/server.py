@@ -508,6 +508,19 @@ def fl_cache(action: str = "stats", scope: str | None = None) -> dict:
 
 
 @tool
+def fl_transients(mine: str, refs: list, max_seconds: float = 45.0) -> dict:
+    """Транзиенты: плотность ударов, атака и «удар/хвост» по полосам.
+
+    `mine` — наш микс (wav), `refs` — список референсов. Сравнивает удар/хвост
+    с медианой референсов: сглаженная атака видна сразу, в дБ.
+    """
+    import transients
+    m = transients.analyse(mine, max_seconds=max_seconds)
+    rs = [transients.analyse(r, max_seconds=max_seconds) for r in refs]
+    return transients.compare(m, rs)
+
+
+@tool
 def fl_wall(mine: str, refs: list[str], a: float | None = None,
             b: float | None = None, section_s: float = 8.0) -> dict:
     """Провалы по полосам и толщина «стены», в сравнении с референсами.

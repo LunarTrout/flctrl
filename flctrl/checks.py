@@ -53,6 +53,14 @@ def _pan(ctx: dict) -> dict:
     return {"advice": pan.advice(pan.analyze(ctx["stems"], ctx.get("a"), ctx.get("b")))}
 
 
+def _transients(ctx: dict) -> dict:
+    import transients
+    mine = transients.analyse(ctx["mix"], max_seconds=ctx.get("transient_s", 45.0))
+    refs = [transients.analyse(r, max_seconds=ctx.get("transient_s", 45.0))
+            for r in ctx["refs"]]
+    return {"mine": mine, "compare": transients.compare(mine, refs)}
+
+
 def _effects_ir(ctx: dict) -> dict:
     import effects
     x, fs = effects._read(ctx["impulse"])
@@ -113,6 +121,10 @@ REGISTRY: list[Check] = [
           extra={"part_of": "fronts"}),
     Check("sections", "Сопоставление одинаковых участков", ("mix", "refs"),
           _sections, "микс"),
+    Check("transients", "Транзиенты: атака, плотность ударов, удар/хвост",
+          ("mix", "refs"),
+          _transients, "динамика",
+          "порог: удар/хвост ниже референсов на 1.5 дБ — атака сглажена"),
     Check("wall", "Провалы по полосам и толщина стены", ("mix", "refs"),
           _wall, "микс"),
     Check("roles", "Слышимость ролей (partial loudness)", ("stems",),

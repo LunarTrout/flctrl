@@ -662,6 +662,21 @@ class _Hear:
         """Разборчивость вокала против остального микса (SII, ANSI S3.5)."""
         return _hear_cli("sii", "--vocal", vocal, "--masker", masker, timeout=1800)
 
+    def transients(self, mix: str, refs: list[str] | None = None,
+                   max_seconds: float = 45.0) -> dict:
+        """Транзиенты: различимые удары, атака и «удар/хвост» против референсов."""
+        import json as _json
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            _json.dump(refs or [], f, ensure_ascii=False)
+            path = f.name
+        try:
+            return _hear_cli("transients", mix, path,
+                             "--seconds", str(max_seconds), timeout=3600)
+        finally:
+            os.unlink(path)
+
     def pan(self, stems: dict, a: float | None = None, b: float | None = None) -> dict:
         """Карта панорамы по полосам/секциям и подсказки на измерениях."""
         import json as _json
