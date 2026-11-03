@@ -187,6 +187,13 @@ uv pip install --python .venv312/Scripts/python.exe frida sounddevice "git+https
 
 ---
 
+## С чего читать
+
+`docs/DESIGN.md` — как устроена библиотека и почему: принципы, куб картин,
+роли и гранулярность, обход разделения референсов, приоритет записи,
+целевая поверхность. Детали — в `docs/SPEC-CONTEXT.md` (реестр пробелов),
+`docs/ARCHITECTURE-PLAN.md` (слои кода), `docs/DESIGN-BALANCE.md` (баланс).
+
 ## Тесты
 
 ```bash
