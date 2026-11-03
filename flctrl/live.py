@@ -355,11 +355,11 @@ def snapshots(limit: int = 50) -> list:
     return rows[:limit]
 
 
-def backup(max_age_s: float = 3600.0, keep: int = 20, save: bool = True) -> dict:
+def backup(max_age_s: float = 3600.0, keep: int = 20, save: bool = False) -> dict:
     """Точка сохранения перед снимком.
 
-    save=True — сначала сохраняем проект в FL (Ctrl+S), чтобы точка отражала
-    текущее состояние. Если сохранить не вышло — берём последний автосейв FL.
+    save=False по умолчанию: НИКОГДА не жмём Ctrl+S за пользователя — иначе в файл
+    попадают тейки записи (клипы в плейлисте). Если нужно — save=True явно.
     Одинаковые файлы не дублируются (sha1), старые точки подрезаются до `keep`.
     """
     import shutil
@@ -427,7 +427,7 @@ def capture_memory(tracks=None, seconds: float = 2.0, start: float | None = None
     except ValueError:
         armed_before = set()
 
-    safety = backup()
+    safety = backup(save=False)
     if popup_state() == 0:
         suppress_popup(True)          # иначе FL откроет модальное окно и всё встанет
     _daemon_send({"cmd": "start"}, timeout=10.0)
@@ -865,7 +865,14 @@ def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
 
     Никаких хуков — значит FL не падает. Диск «засоряется» только на время
     снимка, после чего пустые и рабочие файлы удаляются.
+
+    Запись можно запретить целиком: ``FLCTRL_ALLOW_RECORD=0``. Нужно на живых
+    проектах — кнопка записи оставляет тейки, а те при сохранении превращаются
+    в клипы поверх плейлиста.
     """
+    if os.environ.get("FLCTRL_ALLOW_RECORD", "1") == "0":
+        return {"error": "запись запрещена (FLCTRL_ALLOW_RECORD=0)", "tracks": {},
+                "mode": "files", "frames": {}}
     import numpy as np
     import soundfile as sf
 
@@ -885,7 +892,7 @@ def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
     before = set(os.listdir(RECORDED)) if os.path.isdir(RECORDED) else set()
     if popup_state() == 0:
         suppress_popup(True)
-    safety = backup()
+    safety = backup(save=False)
     error = None
     try:
         if str(was_mode).strip() not in ("1", "1.0"):
