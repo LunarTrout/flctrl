@@ -317,12 +317,51 @@ def fl_simulate(mix_path: str, stems: dict, targets_path: str | None = None,
 
 
 @tool
-def fl_apply_plan(edits: list, track_map: dict, slot: int = 0) -> dict:
+def fl_context(with_params: bool = False, with_routing: bool = True) -> dict:
+    """Полный снимок проекта: дорожки, каналы, слоты, плагины, роутинг, темп.
+
+    Отдаёт факты, а не решения. `coverage` показывает, что в снимок не попало.
+    with_params=True добавляет параметры плагинов — видно полосы эквалайзеров
+    и ручки приборов (медленнее).
+    """
+    return fl.state.context(with_params=with_params, with_routing=with_routing)
+
+
+@tool
+def fl_slot_info(track: int, slot: int) -> dict:
+    """Что стоит в слоте и можно ли работать с ним как с эквалайзером.
+
+    Ничего не меняет: возвращает имя плагина и найденные полосы
+    (номер, текущие Гц и дБ). Это примитив — решение принимает вызывающий.
+    """
+    return fl.apply.info(track, slot)
+
+
+@tool
+def fl_eq_slots(track: int) -> list:
+    """Слоты дорожки, ведущие себя как эквалайзер (определяется по параметрам)."""
+    return fl.apply.slots(track)
+
+
+@tool
+def fl_set_band(track: int, slot: int, band: int, hz: float | None = None,
+                db: float | None = None, q: float | None = None) -> dict:
+    """Поставить одну полосу эквалайзера: частота, усиление, добротность.
+
+    Без семантики «низ/середина»: что именно поставить — решает вызывающий.
+    Незаданные параметры не трогаются; значения подбираются по подписи плагина.
+    """
+    return fl.apply.band(track, slot, band, hz, db, q)
+
+
+@tool
+def fl_apply_plan(edits: list, track_map: dict, slot: int | None = None) -> dict:
     """Применить весь план к живым дорожкам: правки -> эквалайзеры.
 
     `edits` — список правок плана ({stem, region, do_db}), `track_map` — какой
     стем на какой дорожке микшера. Если в слоте пусто, ставит Fruity Parametric
-    EQ 2 вживую; повторный вызов не плодит плагины. Сохраняет проект один раз.
+    EQ 2 в первый СВОБОДНЫЙ слот; если эквалайзер уже стоит — использует его,
+    чужой плагин в слоте не трогает. Сохраняет проект один раз.
     """
     return fl.apply.plan(edits, track_map, slot)
 

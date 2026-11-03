@@ -252,6 +252,71 @@ class _State:
                             "solo": row[6] if len(row) > 6 else None})
         return out
 
+    def context(self, with_params: bool = False, with_routing: bool = True) -> dict:
+        """Полный снимок проекта: всё, что нужно, чтобы принимать решения самому.
+
+        Возвращает факты, а не советы: дорожки (громкость, панорама, mute/solo,
+        сколько эффектов), каналы рэка, слоты с именами плагинов, роутинг,
+        темп. Ничего не меняет.
+
+        Отдельно отдаётся `coverage` — что в снимок НЕ попало и почему. Это
+        защита от «посмотрел не всё»: пропуск видно, а не приходится о нём
+        догадываться.
+
+        with_params=True читает параметры каждого плагина (медленно, зато видно
+        все полосы эквалайзеров и ручки приборов).
+        """
+        out = {"project": None, "tempo": None, "tracks": [], "channels": [],
+               "routing": {}, "coverage": {}}
+        try:
+            out["tempo"] = float(self.tempo())
+        except Exception:
+            pass
+        try:
+            import render_job
+            out["project"] = render_job.window_title()
+        except Exception:
+            pass
+
+        tracks = self.tracks()
+        out["tracks"] = tracks
+        out["channels"] = self.channels()
+
+        plugs = self.plugins([t["i"] for t in tracks])
+        by_track: dict = {}
+        for p in plugs:
+            by_track.setdefault(int(p["track"]), []).append(p)
+
+        for t in tracks:
+            slots = sorted(by_track.get(int(t["i"]), []), key=lambda x: x["slot"])
+            t["slots"] = [{"slot": s["slot"], "plugin": s["name"]} for s in slots]
+            if with_params:
+                import apply as apply_mod
+                for s in t["slots"]:
+                    info = apply_mod.describe_slot(self, int(t["i"]), int(s["slot"]))
+                    s["is_eq"] = info["is_eq"]
+                    s["bands"] = info["bands"]
+                    s["param_count"] = info["param_count"]
+
+        if with_routing:
+            for t in tracks:
+                try:
+                    out["routing"][int(t["i"])] = self.routing(int(t["i"]))
+                except Exception:
+                    out["routing"][int(t["i"])] = None
+
+        empty_routing = [i for i, v in out["routing"].items() if v is None]
+        out["coverage"] = {
+            "tracks": len(tracks),
+            "channels": len(out["channels"]),
+            "slots": sum(len(t["slots"]) for t in tracks),
+            "routing_read": with_routing and not empty_routing,
+            "params_read": bool(with_params),
+            "missing": ([("маршрутизация дорожек %s" % empty_routing)] if empty_routing else [])
+                       + ([] if with_params else ["параметры плагинов (with_params=True)"]),
+        }
+        return out
+
     def routing(self, track: int, dests: list | None = None) -> list:
         """Куда дорожка шлёт: список (получатель, активен).
 
@@ -433,9 +498,11 @@ class _State:
                 out.append({"track": int(t), "slot": int(slot), "name": name})
         return out
 
-    def tempo(self):
+    def tempo(self) -> float:
+        """Темп в BPM. FL отдаёт нормализованное 0..1 — переводим (1.0 = 300 BPM)."""
         import q
-        return self._live(q.LIVE_EXPR["tempo"])
+        raw = float(self._live(q.LIVE_EXPR["tempo"]))
+        return round(raw * 300.0, 2) if raw <= 1.5 else round(raw, 2)
 
     def clip_files(self, flp: str):
         """Связь «клип → файл»: позиция, длина, канал и путь к аудио.
@@ -1147,7 +1214,26 @@ class _Apply:
         return apply_mod.apply_eq(None, track, slot, gains)
 
     @staticmethod
-    def plan(edits: list, track_map: dict, slot: int = 0,
+    def info(track: int, slot: int) -> dict:
+        """Что в слоте: плагин, полосы, похоже ли на эквалайзер. Ничего не меняет."""
+        import apply as apply_mod
+        return apply_mod.describe_slot(None, track, slot)
+
+    @staticmethod
+    def slots(track: int) -> list:
+        """Слоты дорожки, которые ведут себя как эквалайзер (по параметрам)."""
+        import apply as apply_mod
+        return apply_mod.eq_slots(None, track)
+
+    @staticmethod
+    def band(track: int, slot: int, band: int, hz: float | None = None,
+             db: float | None = None, q: float | None = None) -> dict:
+        """Поставить одну полосу: номер полосы, частота, усиление, добротность."""
+        import apply as apply_mod
+        return apply_mod.set_band(None, track, slot, band, hz, db, q)
+
+    @staticmethod
+    def plan(edits: list, track_map: dict, slot: int | None = None,
              ensure_eq: bool = True) -> dict:
         """Применить весь план к живым дорожкам: стем -> номер дорожки."""
         import apply as apply_mod

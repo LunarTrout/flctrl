@@ -74,5 +74,17 @@ def main() -> int:
     return 1 if failed else 0
 
 
+def _stop():
+    """Никакой тест не должен оставлять транспорт играющим."""
+    try:
+        import fl_lib as _fl
+        _fl._State._live("transport.stop()", attempts=1)
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    finally:
+        _stop()
