@@ -129,8 +129,20 @@ def _n_series(lv: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return N, spec
 
 
+def _hz_masks() -> dict:
+    """Области в герцах — по ним считается честное отношение уровней."""
+    edges = {"sub": (0, 60), "bass": (60, 120), "lowmid": (120, 300),
+             "mid": (300, 1200), "upmid": (1200, 3000), "pres": (3000, 6000),
+             "air": (6000, 30000)}
+    out = {}
+    for name, (lo, hi) in edges.items():
+        out[name] = (TC >= lo) & (TC < hi)
+    return out
+
+
 def _sections_by_region(spec_mix, spec_rest, spec_solo, masks, t, section_s,
-                        regions_global, offset: float = 0.0) -> list:
+                        regions_global, offset: float = 0.0,
+                        p_stem=None, p_mix=None) -> list:
     """Слышимость по секциям: где именно инструмент пропадает.
 
     Глобальное «A = 0.2» скрывает, что в куплете всё в порядке, а в припеве
@@ -160,13 +172,23 @@ def _sections_by_region(spec_mix, spec_rest, spec_solo, masks, t, section_s,
             reg[name] = (round(float(np.clip(np.mean(part) / denom, 0, 1)), 3)
                          if denom > 1e-9 else 0.0)
             sh[name] = (round(denom / total_solo, 3) if total_solo > 1e-9 else 0.0)
-            # отношение «инструмент / остальное» в полосе: не насыщается нулём,
-            # поэтому по нему можно планировать правку в плотном миксе
+            # отношение «инструмент / остальное» в полосе — в дБ УРОВНЯ, а не
+            # громкости: громкость сжимает уровень (≈0.23 на дБ), и правка,
+            # посчитанная по ней, была бы вчетверо меньше нужной
             r_mean = float(np.mean(rest))
-            snr[name] = (round(float(np.clip(10 * np.log10(max(denom, 1e-30)
-                                                          / max(r_mean, 1e-30)),
-                                            -40, 40)), 1)
-                         if r_mean > 1e-9 else 40.0)
+            if p_stem is not None and p_mix is not None:
+                hz = _hz_masks()
+                m = hz.get(name)
+                ps = float(np.mean(p_stem[sl][:, m].sum(axis=1))) if (m is not None and m.any()) else 0.0
+                pm = float(np.mean(p_mix[sl][:, m].sum(axis=1))) if (m is not None and m.any()) else 0.0
+                pr = max(pm - ps, 1e-30)
+                snr[name] = (round(float(np.clip(10 * np.log10(max(ps, 1e-30) / pr), -60, 60)), 1)
+                             if ps > 1e-30 else -60.0)
+            else:
+                snr[name] = (round(float(np.clip(10 * np.log10(max(denom, 1e-30)
+                                                              / max(r_mean, 1e-30)),
+                                                -60, 60)), 1)
+                             if r_mean > 1e-9 else 60.0)
         out.append({"t": round(float(t[start]) + offset, 1), "regions": reg,
                     "share": sh, "snr": snr, "active": total_solo > 1e-6})
     return out
@@ -256,7 +278,8 @@ def _attribute_mg(mix_path: str, stems: dict[str, str], a: float | None = None,
         if section_s:
             row["sections"] = _sections_by_region(spec_mix, spec_rest, spec_solo,
                                                   masks, t, section_s, regions,
-                                                  offset=float(a or 0.0))
+                                                  offset=float(a or 0.0),
+                                                  p_stem=p, p_mix=p_mix)
         out["stems"][name] = row
 
     total = sum(v["N_partial"] for v in out["stems"].values()) or 1e-9
