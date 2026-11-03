@@ -283,6 +283,40 @@ def fl_ping() -> dict:
 
 
 @tool
+def fl_simulate(mix_path: str, stems: dict, targets_path: str | None = None,
+                cap_db: float = 3.0, section_s: float = 8.0) -> dict:
+    """Проверить план до записи в FL: применить правки к стемам и перемерить.
+
+    Возвращает новый микс во временной папке и сравнение слышимости до/после —
+    видно, даёт ли план тот эффект, ради которого он предложен.
+    """
+    import decide
+    import partial
+    import roles as roles_mod
+    import simulate
+    import snrtargets
+
+    attr0 = partial.attribute_mg(mix_path, stems, None, None, section_s=section_s)
+    roles_map = {n: roles_mod.role_of(n, p) for n, p in stems.items()}
+    tg = {}
+    if targets_path:
+        model = snrtargets.load(targets_path)
+        for name, role in roles_map.items():
+            t = snrtargets.for_role(model, role)
+            if t:
+                tg[role] = t
+    plan = decide.plan(attr0, cap_db=cap_db, targets=tg or None, roles_map=roles_map)
+    if not plan["edits"]:
+        return {"plan": plan, "note": "правок нет — проверять нечего"}
+    sim = simulate.simulate(mix_path, stems, plan["edits"])
+    attr1 = partial.attribute_mg(sim["mix"], sim["stems"], None, None,
+                                 section_s=section_s)
+    return {"plan_count": plan["count"], "applied": sim["applied"],
+            "mix": sim["mix"], "dir": sim["dir"],
+            "before_after": simulate.compare_before_after(attr0, attr1)["rows"]}
+
+
+@tool
 def fl_doctor() -> dict:
     """Самодиагностика живого API: десять чтений с временем и результатом.
 
