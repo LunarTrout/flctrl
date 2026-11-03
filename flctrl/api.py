@@ -20,6 +20,34 @@ import re
 
 WILDCARD = "*"
 
+# Кадры живут под id: сравнение принимает id, а не мегабайты таблиц.
+STORE: dict = {}
+_SEQ = {"frame": 0, "change": 0}
+UNDO: list = []
+DRY_RUN = False
+
+
+def _next_id(prefix: str) -> str:
+    _SEQ[prefix] = _SEQ.get(prefix, 0) + 1
+    return "%s%d" % (prefix[0], _SEQ[prefix])
+
+
+def _store_frame(frame: dict) -> dict:
+    fid = _next_id("frame")
+    frame = dict(frame)
+    frame["id"] = fid
+    STORE[fid] = frame
+    return frame
+
+
+def _resolve(x):
+    """Принять id кадра или сам кадр."""
+    if isinstance(x, str):
+        if x not in STORE:
+            raise ApiError("unknown_frame", x)
+        return STORE[x]
+    return x
+
 
 class ApiError(Exception):
     def __init__(self, code: str, path: str = "", **kw):
@@ -156,8 +184,17 @@ def list_node(path: str = "/", depth: int = 1, fl=None) -> list:
                                  name=p["name"], text=p["text"]) for p in params]
         raise ApiError("path_not_found", path)
 
+    if t[0] == "measure":
+        if len(t) == 1:
+            return [{"id": k, "metric": v.get("metric"), "unit": v.get("unit")}
+                    for k, v in STORE.items()]
+        fid = t[1]
+        if fid not in STORE:
+            raise ApiError("unknown_frame", path)
+        return STORE[fid]
+
     if t[0] == "section":
-        from . import session_state
+        import session_state
         a, b = session_state.get_section()
         return [item("/section/a", "float", value=a, unit="с"),
                 item("/section/b", "float", value=b, unit="с")]
@@ -172,6 +209,22 @@ def get(path: str, fl=None):
     t = tokens(path)
     if not t:
         return list_node("/", fl=fl)
+    if t[0] == "measure":
+        if len(t) == 1:
+            return [{"id": k, "metric": v.get("metric"), "unit": v.get("unit")}
+                    for k, v in STORE.items()]
+        if t[1] not in STORE:
+            raise ApiError("unknown_frame", path)
+        return STORE[t[1]]
+    if t[0] == "section":
+        import session_state
+        a_, b_ = session_state.get_section()
+        if len(t) == 1:
+            return {"a": a_, "b": b_}
+        if len(t) == 2 and t[1] in ("a", "b"):
+            return {"value": a_ if t[1] == "a" else b_, "type": "float", "unit": "с"}
+        raise ApiError("path_not_found", path)
+
     if WILDCARD in t:
         return _get_wild(path, fl)
 
@@ -252,10 +305,34 @@ def _get_wild(path: str, fl) -> list:
 
 # ------------------------------------------------------------------ set
 
-def set_value(path: str, value, fl=None) -> dict:
+def dry_run(on: bool = True) -> dict:
+    """Включить/выключить режим «только показать»: set ничего не меняет."""
+    global DRY_RUN
+    DRY_RUN = bool(on)
+    return {"dry_run": DRY_RUN}
+
+
+def undo(n: int = 1) -> dict:
+    """Откатить последние n изменений (в обратном порядке)."""
+    done = []
+    for _ in range(max(0, int(n))):
+        if not UNDO:
+            break
+        ch = UNDO.pop()
+        try:
+            set_value(ch["path"], ch["before"], record=False)
+            done.append(ch["path"])
+        except Exception as exc:
+            done.append({"path": ch["path"], "error": str(exc)[:80]})
+    return {"undone": done, "left": len(UNDO)}
+
+
+def set_value(path: str, value, fl=None, record: bool = True) -> dict:
     fl = fl or _fl()
     t = tokens(path)
     before = _safe_before(path, fl)
+    if DRY_RUN:
+        return {"path": path, "before": before, "after": value, "dry_run": True}
 
     if t[0] == "track":
         i = _int(t[1], "track", path)
@@ -286,7 +363,7 @@ def set_value(path: str, value, fl=None) -> dict:
     elif t[0] == "transport" and len(t) == 2 and t[1] == "position":
         fl._State._live("transport.setSongPos(%r)" % _as_float(value, path, 0.0, 1.0))
     elif t[0] == "section":
-        from . import session_state
+        import session_state
         a, b = session_state.get_section()
         if len(t) == 2 and t[1] in ("a", "b"):
             a, b = (float(value), b) if t[1] == "a" else (a, float(value))
@@ -298,7 +375,11 @@ def set_value(path: str, value, fl=None) -> dict:
     else:
         raise ApiError("not_writable", path)
 
-    return {"path": path, "before": before, "after": _safe_before(path, fl)}
+    after = _safe_before(path, fl)
+    if record:
+        UNDO.append({"path": path, "before": before, "after": after})
+        _SEQ["change"] = _SEQ.get("change", 0) + 1
+    return {"path": path, "before": before, "after": after}
 
 
 def _safe_before(path: str, fl):
@@ -378,6 +459,16 @@ def call(op: str, args: dict | None = None, fl=None) -> dict:
                 fs = fs_i
             loaded[role] = x
         loaded = invmix.align(*loaded.values())
+        # Калибровка: абсолютный уровень наших дорожек и референса разный, а
+        # гейнами его всё равно не выправить — выравниваем средний уровень
+        # цели по нашей сумме, иначе оптимизатор видит только постоянный сдвиг.
+        base = invmix.metrics(invmix.mix(dict(zip(stems, loaded)),
+                                         {k: 0.0 for k in stems}), fs)
+        if target.get("bands_db") and base.get("bands_db"):
+            shift = (sum(base["bands_db"]) / len(base["bands_db"])
+                     - sum(target["bands_db"]) / len(target["bands_db"]))
+            target["bands_db"] = [b + shift for b in target["bands_db"]]
+            target["_level_shift_db"] = round(shift, 2)
         res = invmix.solve(dict(zip(stems, loaded)), fs, target,
                            cap_db=float(a.get("cap_db", 6.0)),
                            step_db=float(a.get("step_db", 0.5)))
@@ -558,7 +649,7 @@ def _finish(frame: dict, metric: str, spec: dict) -> dict:
     """Если в спеке есть against — вернуть картину вместе с коридором и вылетами."""
     against = spec.get("against")
     if not against:
-        return frame
+        return _store_frame(frame)
     if isinstance(against, str):
         against = [against]
     refs = []
@@ -570,6 +661,7 @@ def _finish(frame: dict, metric: str, spec: dict) -> dict:
     import frames
     cor = frames.corridor(refs)
     cmp_ = frames.compare_corridor(frame, cor)
+    frame = _store_frame(frame)
     return {"ours": frame, "refs": [f["axes"]["source"][0] for f in refs],
             "corridor": {"n": cor["n"], "median": cor["median"]["values"],
                          "lo": cor["lo"]["values"], "hi": cor["hi"]["values"]},
@@ -577,12 +669,17 @@ def _finish(frame: dict, metric: str, spec: dict) -> dict:
 
 
 def compare(a, b, top: int | None = None) -> dict:
-    """Сравнить картину с картиной или с набором (коридор по референсам)."""
+    """Сравнить картину с картиной или с набором (коридор по референсам).
+
+    Принимает и кадры, и их id — id короче и не раздувает контекст.
+    """
     import frames
+    a = _resolve(a)
     if isinstance(b, list):
+        b = [_resolve(x) for x in b]
         cor = frames.corridor(b)
         return frames.compare_corridor(a, cor, top=top)
-    return frames.compare(a, b, top=top)
+    return frames.compare(a, _resolve(b), top=top)
 
 
 def _metrics_of(path: str, a=None, b=None) -> dict:

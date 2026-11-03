@@ -178,7 +178,7 @@ def _maybe_reload() -> bool:
 # Полный набор — переменная окружения FLCTRL_MCP_FULL=1.
 FULL = os.environ.get("FLCTRL_MCP_FULL", "0").lower() in ("1", "true", "yes")
 COMPACT_NAMES = {"fl_list", "fl_get", "fl_set", "fl_call", "fl_measure",
-                 "fl_compare", "fl_help"}
+                 "fl_compare", "fl_help", "fl_undo", "fl_dry_run"}
 
 
 def tool(fn):
@@ -353,6 +353,20 @@ def fl_call(op: str, args: dict | None = None) -> dict:
     """Действие: plugin.insert/delete/replace, transport.play/stop, save, track.add."""
     import api
     return api.call(op, args)
+
+
+@tool
+def fl_undo(n: int = 1) -> dict:
+    """Откатить последние n изменений (в обратном порядке)."""
+    import api
+    return api.undo(n)
+
+
+@tool
+def fl_dry_run(on: bool = True) -> dict:
+    """Режим «только показать»: set ничего не меняет, возвращает план изменений."""
+    import api
+    return api.dry_run(on)
 
 
 @tool
