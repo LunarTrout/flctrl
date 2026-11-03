@@ -59,6 +59,25 @@ machine-readable code.
 
 ---
 
+## Live capture result
+
+`tracks.live` / `live.capture(...)` returns:
+
+| Field | Meaning |
+|---|---|
+| `tracks` | per track: `name`, `role`, `rms`, `peak`, `silent`, `tape`, `transients` |
+| `mode_used` | `memory` (stream, default) or `files` (fallback when the hook daemon is down) |
+| `clips` | `{before, during, after}` — `AutoCreateClip` around the take |
+| `take_discarded` | `1` when the recording step was rolled back, `-1` if the rollback could not be verified |
+| `clips_clean` | the playlist is guaranteed untouched (flag restored and the take dropped) |
+| `undo` | undo hint before/after (`general.getUndoLevelHint`) |
+| `project_restored` | only with `discard_take=False`: what the transaction did |
+| `masking`, `provenance`, `position` | cross-track layers, see [TAPE.md](TAPE.md) |
+
+`start` is a **fraction of the project length** (0…1), the same unit `transport.setSongPos`
+takes; `seconds` is the length of the take. Track indices come from the project
+(`mixer.getTrackCount()`), nothing is hard-coded.
+
 ## Paths
 
 `fl_get(path)` / `fl_set(path, value)` address the project directly:

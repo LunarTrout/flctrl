@@ -126,12 +126,9 @@ compute the tape, delete them, disarm, restore the previous mode. The `Recorded`
 empty afterwards (verified). FL stays alive and the project is unchanged apart from
 armed-state, which is restored.
 
-**`memory` (zero disk).** A Frida hook on `CreateFileW`/`WriteFile` recognises the record
-files, copies the PCM into memory and zeroes the write length, so FL believes it wrote
-while only a 76-byte header reaches disk (removed by `live.clean()`). The hook lives in a
-long-running daemon (`tools-local/hook_daemon.py`, port 9788) so it is attached once per
-session. This is the purest path, and it is the one that occasionally destabilised FL
-during development — hence the default.
+The hook behind `memory` is described in [docs/LIVE.md](docs/LIVE.md): `CreateFileW` maps
+handles to record files, `WriteFile` hands the PCM over and zeroes the length, and the daemon
+(`tools-local/hook_daemon.py`, port 9788) keeps one attachment per FL session.
 
 Both modes share: no project reload, no modal dialogs (FL's "Recording" popup is
 suppressed via `PopupRec`), and a save point before every capture.

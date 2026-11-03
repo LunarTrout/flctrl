@@ -116,6 +116,9 @@
 | `position` | `{start_seconds, bpm}` — привязка снимка к песне |
 | `backup` | точка сохранения: `{ok, file, origin: "save"|"autosave", points}` |
 | `cleaned` | сколько пустых файлов убрано из `Recorded` |
+| `mode_used` | `memory` (поток) или `files` (запасной путь) |
+| `clips` | `{before, during, after}` — `AutoCreateClip` вокруг тейка |
+| `take_discarded` | шаг записи откачен, поэтому клип не появится при сохранении |
 
 ---
 

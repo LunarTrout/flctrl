@@ -59,6 +59,25 @@
 
 ---
 
+## Результат живого снимка
+
+`tracks.live` / `live.capture(...)` возвращает:
+
+| Поле | Смысл |
+|---|---|
+| `tracks` | по дорожке: `name`, `role`, `rms`, `peak`, `silent`, `tape`, `transients` |
+| `mode_used` | `memory` (поток, по умолчанию) или `files` (запасной путь, если демон хука не поднят) |
+| `clips` | `{before, during, after}` — `AutoCreateClip` вокруг тейка |
+| `take_discarded` | `1`, если шаг записи откатили; `-1`, если откат не удалось подтвердить |
+| `clips_clean` | плейлист гарантированно не тронут (флаг возвращён, тейк выброшен) |
+| `undo` | подсказка undo до/после (`general.getUndoLevelHint`) |
+| `project_restored` | только при `discard_take=False`: что сделала транзакция |
+| `masking`, `provenance`, `position` | меж-дорожные слои, см. [TAPE.ru.md](TAPE.ru.md) |
+
+`start` — **доля длины проекта** (0…1), та же единица, что принимает `transport.setSongPos`;
+`seconds` — длина тейка. Номера дорожек берутся из проекта (`mixer.getTrackCount()`), ничего
+не зашито.
+
 ## Пути
 
 `fl_get(path)` / `fl_set(path, value)` адресуют проект напрямую:

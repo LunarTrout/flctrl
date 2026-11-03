@@ -30,35 +30,7 @@ Two facts that cost time to learn:
 
 ---
 
-## 2. Mode `files` (default)
-
-```
-save point  →  Ctrl+S + copy .flp
-arm         →  mixer.armTrack for the requested tracks
-record on   →  transport.record()
-play        →  setSongPos(start); start()
-wait        →  seconds
-stop        →  stop(); record() off
-read        →  new files in Recorded → soundfile → tape
-cleanup     →  delete those files
-restore     →  disarm what we armed; restore song/pattern mode
-```
-
-Properties:
-
-- disk is touched only for the duration of the take, then emptied;
-- FL is not restarted; the project is not reloaded;
-- armed state and mode are restored even on exceptions (`try/finally`);
-- verified: every track of the test project (29 at the time) in one take, `Recorded` empty
-  afterwards; the list comes from `mixer.getTrackCount()`, so the count is whatever the
-  project has;
-
-Caveat: in song mode FL may insert an audio clip into the playlist for a recording
-("auto-create audio clip"). This was never confirmed to be the cause of a reported loudness
-change, but it is the reason the library does not run captures on a working project without
-asking.
-
-## 3. Mode `memory` (zero disk)
+## 2. Mode `memory` (default, zero disk)
 
 FL writes PCM with `WriteFile` from `FLEngine_x64.dll+0x3b5fa`. The payload is raw float32
 stereo; the first write of a file carries a 4-byte prefix, the rest are contiguous PCM. We
@@ -82,12 +54,68 @@ the hook lives in a **separate long-running daemon** (`tools-local/hook_daemon.p
   the timeout;
 - `ensure_daemon()` starts it on demand and re-attaches if FL's PID changed.
 
-This mode writes nothing but headers, which `live.clean()` removes. It was less stable than
-`files` on FL 25.2.5 and is therefore opt-in.
+This mode is the default: it writes nothing but headers, which `live.clean()` removes. It was
+less stable than `files` on FL 25.2.5, so `capture()` falls back to `files` if the daemon is
+not up.
 
 ---
 
-## 4. Safety
+## 3. Mode `files` (fallback)
+
+```
+save point  →  Ctrl+S + copy .flp
+arm         →  mixer.armTrack for the requested tracks
+record on   →  transport.record()
+play        →  setSongPos(start); start()
+wait        →  seconds
+stop        →  stop(); record() off
+read        →  new files in Recorded → soundfile → tape
+cleanup     →  delete those files
+restore     →  disarm what we armed; restore song/pattern mode
+```
+
+Properties:
+
+- disk is touched only for the duration of the take, then emptied;
+- FL is not restarted; the project is not reloaded;
+- armed state and mode are restored even on exceptions (`try/finally`);
+- verified: every track of the test project (29 at the time) in one take, `Recorded` empty
+  afterwards; the list comes from `mixer.getTrackCount()`, so the count is whatever the
+  project has;
+
+The playlist is not touched — see section 4. `files` is the fallback: `capture()` uses it
+automatically when the hook daemon is not reachable, and says so in `mode_used`.
+
+## 4. The playlist stays untouched
+
+FL's Mixer → Disk Recording → **Auto-create audio clip** is on by default: every recorded
+take becomes an audio clip in the playlist, and stacked takes play on top of each other —
+this is what made the project jump in level in one spot.
+
+Two details matter, both measured on a live project:
+
+1. FL reads `AutoCreateClip` (registry, `HKCU\\Software\\Image-Line\\FL Studio 25`) **at
+   record time**, so it can be switched off just for the take.
+2. The clip itself is materialised **when the project is saved**, not at record time. Clearing
+   the flag for the take and restoring it before the save still produced clips; the take has
+   to be discarded from the undo history.
+
+So `capture()` does three things, for both modes:
+
+```
+flag = AutoCreateClip            # usually 1
+AutoCreateClip := 0
+...  take: arm, record, play, read PCM, stop, disarm
+general.undoUpDown(-1)           # drop the recording step
+AutoCreateClip := flag           # user's own recording keeps creating clips
+```
+
+The result reports `clips: {before, during, after}`, `take_discarded` and `clips_clean`.
+Verified on `vers1`: two tracks captured (DRUMS SD3 rms 0.052, BASS rms 0.106), the `Recorded`
+folder unchanged, and after saving the project the number of clips recorded that day stayed
+at zero.
+
+## 5. Safety
 
 **Save points.** Before every capture: `Ctrl+S` in FL (the window is brought to the
 foreground; if it cannot be, the save is refused rather than typing into another window),
@@ -103,7 +131,7 @@ design, the presence of new files is checked once, and the bridge calls have tim
 
 ---
 
-## 5. Failure modes seen in practice
+## 6. Failure modes seen in practice
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -115,7 +143,7 @@ design, the presence of new files is checked once, and the bridge calls have tim
 
 ---
 
-## 6. What is verified, and what is not
+## 7. What is verified, and what is not
 
 Verified on FL 25.2.5 (build 5319):
 
@@ -128,6 +156,6 @@ Verified on FL 25.2.5 (build 5319):
 
 Not verified:
 
-- behaviour of the "auto-create audio clip" option during capture (see the caveat above);
+- captures longer than a few seconds; the row is bounded by the take length;
 - long takes (> 30 s) — untested beyond a few seconds;
 - any FL version other than 25.2.5.

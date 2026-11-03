@@ -117,6 +117,9 @@ in a separate layer (see [LIVE.md](LIVE.md) and `events.py`).
 | `position` | `{start_seconds, bpm}` — the anchor of the take in the song |
 | `backup` | save point: `{ok, file, origin: "save"|"autosave", points}` |
 | `cleaned` | how many header-only files were removed from `Recorded` |
+| `mode_used` | `memory` (stream) or `files` (fallback) |
+| `clips` | `{before, during, after}` — `AutoCreateClip` around the take |
+| `take_discarded` | the recording step rolled back, so no playlist clip appears on save |
 
 ---
 
