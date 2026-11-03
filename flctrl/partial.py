@@ -142,7 +142,7 @@ def _hz_masks() -> dict:
 
 def _sections_by_region(spec_mix, spec_rest, spec_solo, masks, t, section_s,
                         regions_global, offset: float = 0.0,
-                        p_stem=None, p_mix=None) -> list:
+                        p_stem=None, p_rest=None) -> list:
     """Слышимость по секциям: где именно инструмент пропадает.
 
     Глобальное «A = 0.2» скрывает, что в куплете всё в порядке, а в припеве
@@ -176,12 +176,12 @@ def _sections_by_region(spec_mix, spec_rest, spec_solo, masks, t, section_s,
             # громкости: громкость сжимает уровень (≈0.23 на дБ), и правка,
             # посчитанная по ней, была бы вчетверо меньше нужной
             r_mean = float(np.mean(rest))
-            if p_stem is not None and p_mix is not None:
+            if p_stem is not None and p_rest is not None:
                 hz = _hz_masks()
                 m = hz.get(name)
                 ps = float(np.mean(p_stem[sl][:, m].sum(axis=1))) if (m is not None and m.any()) else 0.0
-                pm = float(np.mean(p_mix[sl][:, m].sum(axis=1))) if (m is not None and m.any()) else 0.0
-                pr = max(pm - ps, 1e-30)
+                pr = float(np.mean(p_rest[sl][:, m].sum(axis=1))) if (m is not None and m.any()) else 1e-30
+                pr = max(pr, 1e-30)
                 snr[name] = (round(float(np.clip(10 * np.log10(max(ps, 1e-30) / pr), -60, 60)), 1)
                              if ps > 1e-30 else -60.0)
             else:
@@ -235,11 +235,14 @@ def _attribute_mg(mix_path: str, stems: dict[str, str], a: float | None = None,
     out: dict = {"model": "iso532-2", "dur": float(t[-1] - t[0] + 0.1) if len(t) else 0.0,
                  "level_spl": level_spl, "stems": {}}
 
+    # первый проход: загрузить стемы и сложить их мощности.
+    # «Остальное» должно считаться одинаково с референсами: у них разделение
+    # даёт стемы, которые в сумме и есть микс, поэтому сумма стемов — честная
+    # база. Мастер минус стем такой базой не является (мастер обработан).
+    loaded: dict = {}
     for name, path in stems.items():
         x, fs_s = _read(path, a, b)
         if fs_s != fs:
-            # стем мог быть отрендерен в другой частоте — приводим к миксу,
-            # иначе полоса выше половины меньшей частоты просто отсутствует
             from math import gcd
 
             from scipy.signal import resample_poly
@@ -248,8 +251,12 @@ def _attribute_mg(mix_path: str, stems: dict[str, str], a: float | None = None,
             x = resample_poly(x, fs // g, fs_s // g)
         x = _align(x, n)
         lv_raw, _ = bands29(x, fs)
-        lv = lv_raw + offset
-        p = 10 ** (lv / 10)
+        p = 10 ** ((lv_raw + offset) / 10)
+        loaded[name] = p
+
+    for name, path in stems.items():
+        p = loaded[name]
+        lv = 10 * np.log10(np.maximum(p, 1e-30))
 
         N_solo, spec_solo, _ = mg_series(lv)
         p_rest = np.maximum(p_mix - p, 10 ** (FLOOR_DB / 10))
@@ -283,10 +290,16 @@ def _attribute_mg(mix_path: str, stems: dict[str, str], a: float | None = None,
             "regions": regions,
         }
         if section_s:
+            # «остальное» — это мастер минус стем. Так же считаются и референсы
+            # (оригинал минус стем разделения), поэтому сравнение честное.
+            # Сумма поданных стемов для этого не годится: набор может быть
+            # неполным (нет правой гитары, клавиш), и тогда роль выглядит
+            # на десятки дБ громче, чем есть.
+            p_others = np.maximum(p_mix - p, 1e-30)
             row["sections"] = _sections_by_region(spec_mix, spec_rest, spec_solo,
                                                   masks, t, section_s, regions,
                                                   offset=float(a or 0.0),
-                                                  p_stem=p, p_mix=p_mix)
+                                                  p_stem=p, p_rest=p_others)
         out["stems"][name] = row
 
     total = sum(v["N_partial"] for v in out["stems"].values()) or 1e-9
