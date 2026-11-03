@@ -654,34 +654,18 @@ def call(op: str, args: dict | None = None, fl=None) -> dict:
 
     if op == "tracks.live":
         import live
-        import frames
         tracks = a.get("tracks")
         tracks = [int(x) for x in tracks] if tracks else None
         res = live.capture(tracks=tracks, seconds=float(a.get("seconds", 2.0)),
                            start=a.get("start"))
-        out_frames = {}
-        for t, v in res["tracks"].items():
-            st = v.pop("strip", None)
-            v.pop("mono", None)
-            v.pop("stereo", None)                # сырые сэмплы наружу не отдаём
-            if not st:
-                continue
-            try:
-                out_frames[str(t)] = frames.make_frame(
-                    "bands", {"time": st["times"], "band": st["fc"]}, st["bands"],
-                    coverage={"measured": [v.get("name") or str(t)]})
-            except ValueError as exc:
-                v["frame_error"] = str(exc)[:120]
-        res["frames"] = out_frames
-        res["tracks"] = {str(k): v for k, v in res["tracks"].items()}
-        res["cleaned"] = live.clean()
+        res.pop("_samples", None)          # сэмплы наружу не отдаём
         return res
 
     if op == "tracks.dump":
         import live
         tracks = a.get("tracks")
         tracks = [int(x) for x in tracks] if tracks else None
-        return live.save(tracks=tracks, seconds=float(a.get("seconds", 5.0)),
+        return live.dump(tracks=tracks, seconds=float(a.get("seconds", 5.0)),
                          start=a.get("start"), outdir=a.get("outdir"),
                          fmt=str(a.get("fmt", "wav")))
 
