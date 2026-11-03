@@ -1047,7 +1047,8 @@ def help(what: str | None = None) -> dict:
                 "metrics": {k: {"unit": v["unit"], "axes": list(v["axes"]),
                                 "source": v["source"]} for k, v in frames.METRICS.items()},
                 "measures_now": ["bands", "rms", "peak", "crest", "lufs",
-                                 "transients", "harmony", "wall", "sii", "partial"]}
+                                 "transients", "harmony", "wall", "sii", "partial",
+                                 "masking", "stereo", "erb"]}
     if what == "paths":
         return {"paths": PATHS_HELP}
     if what == "ops":
