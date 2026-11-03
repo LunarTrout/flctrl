@@ -98,3 +98,14 @@ Capture on a working project only with permission; a project copy is safer.
 
 Ctrl+S plus a copy of the `.flp` into `~/Backups/flctrl/` before a capture or a batch edit.
 Undo history lives in memory and dies with the process; a file snapshot survives a crash.
+
+## 16. Recording inserts clips into the playlist — turn it off
+
+By default FL records an armed mixer track to disk **and** inserts the recorded WAV as an
+audio clip in the playlist (Mixer → Disk Recording → **Auto-create audio clip**). The clips
+land on top of each other at the same point, and the project gets far louder there. That is
+not a mixing bug — it is stacked duplicates.
+
+Switched off for good: `HKCU\Software\Image-Line\FL Studio 25\AutoCreateClip = 0`
+(`live.clips_guard()` checks and sets it). FL reads the value at startup, so FL needs a
+restart after the change.

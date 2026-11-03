@@ -621,13 +621,54 @@ def _picture(cells, res, fc, times) -> str:
         return "не нарисовалось: %s" % str(exc)[:80]
 
 
+def clips_guard(enable: bool = True) -> dict:
+    """Авто-создание аудиоклипов в плейлисте: выключить.
+
+    FL при записи armed-дорожек пишет WAV и (если опция включена) вставляет его
+    клипом в плейлист. Клипы накладываются друг на друга — отсюда «в одном месте
+    резко громко». Опция живёт в меню микшера: Disk Recording → Auto-create audio
+    clip, а хранится в реестре как ``AutoCreateClip``. Читается при старте FL,
+    поэтому смена значения действует со следующего запуска.
+
+    Возвращает текущее значение, прежнее (если меняли) и предупреждение.
+    """
+    key = r"Software\Image-Line\FL Studio 25"
+    out = {"key": key, "value": None, "before": None, "changed": False, "needs_restart": False}
+    try:
+        import winreg
+    except Exception as exc:  # не Windows
+        out["error"] = str(exc)[:120]
+        return out
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_READ) as k:
+            out["value"] = int(winreg.QueryValueEx(k, "AutoCreateClip")[0])
+        out["before"] = out["value"]
+        if enable and out["value"] != 0:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as k:
+                winreg.SetValueEx(k, "AutoCreateClip", 0, winreg.REG_SZ, "0")
+            out["value"] = 0
+            out["changed"] = True
+        out["needs_restart"] = out["changed"] and bool(fl_pid())
+    except FileNotFoundError:
+        out["error"] = "в реестре нет AutoCreateClip"
+    except Exception as exc:
+        out["error"] = str(exc)[:120]
+    return out
+
+
 def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
             fade: bool = True, want_audio: bool = False, mode: str = "files") -> dict:
     """Снимок звука дорожек. mode="files" — надёжно (FL пишет и сразу удаляем),
     mode="memory" — через хук, на диск не пишется ничего вообще."""
+    guard = clips_guard(True)
     fn = capture_memory if str(mode).startswith("mem") else capture_files
-    return fn(tracks=tracks, seconds=seconds, start=start, fade=fade,
-              want_audio=want_audio)
+    res = fn(tracks=tracks, seconds=seconds, start=start, fade=fade,
+             want_audio=want_audio)
+    res["clips"] = guard
+    if guard.get("needs_restart"):
+        res["warning"] = ("включено авто-создание клипов, значение сброшено в 0 — "
+                          "действует после перезапуска FL; сейчас клипы ещё могут появиться")
+    return res
 
 
 def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
