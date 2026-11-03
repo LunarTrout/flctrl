@@ -791,6 +791,44 @@ def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
             tracks = [1]
     tracks = [int(x) for x in tracks]
 
+    if str(mode).lower() == "rt" and os.environ.get("FLCTRL_RT") == "1":
+        # живой съём post-FX со всех дорожек: без файлов и без шага записи.
+        # если движок не отдаёт сигнал (холодный старт FL) — падаем на files.
+        got = {}
+        try:
+            try:
+                import rt as _rt
+            except ImportError:
+                from . import rt as _rt
+            got = _rt.capture_tracks(tracks, seconds=float(seconds), start=start)
+        except Exception:  # noqa: BLE001
+            got = {}
+        if got:
+            import numpy as np
+            out, samples = {}, {}
+            for idx, v in got.items():
+                wav = v["wav"]
+                mono = wav.mean(axis=1) if wav.ndim > 1 else wav
+                try:
+                    nm = str(_bridge("mixer.getTrackName(%d)" % int(idx))).strip("'\"")
+                except OSError:
+                    nm = "track_%d" % int(idx)
+                out[str(idx)] = {"file": None, "name": nm, "role": _role(nm),
+                                 "seconds": round(len(mono) / 44100.0, 2),
+                                 "rms": round(float(np.sqrt((mono ** 2).mean())), 5),
+                                 "peak": round(float(np.abs(mono).max()), 4),
+                                 "silent": False, "source": "rt",
+                                 "match_corr": v.get("corr")}
+                samples[idx] = np.asarray(wav, dtype="float64")
+            res = {"tracks": out, "frames": {}, "seconds": float(seconds),
+                   "start": start, "mode_used": "rt", "mode": "rt",
+                   "clips": {"before": None, "during": None, "after": None},
+                   "take_discarded": 0}
+            if want_audio:
+                res["_samples"] = samples
+            return res
+        mode = "files"
+
     limit = int(chunk_tracks or CHUNK_TRACKS)
     secs = float(seconds)
     # поток не тянет длинные тейки — режем и по времени
