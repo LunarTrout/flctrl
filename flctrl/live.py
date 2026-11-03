@@ -795,35 +795,50 @@ def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
         # живой съём post-FX со всех дорожек: без файлов и без шага записи.
         # если движок не отдаёт сигнал (холодный старт FL) — падаем на files.
         got = {}
+        woke = None
         try:
             try:
                 import rt as _rt
             except ImportError:
                 from . import rt as _rt
+            if os.environ.get("FLCTRL_RT_WAKE") == "1":
+                woke = _rt.wake(track=tracks[0] if tracks else 1)
             got = _rt.capture_tracks(tracks, seconds=float(seconds), start=start)
+            if not got and woke is not None:
+                # после пробуждения первый прогон иногда пустой — один повтор
+                got = _rt.capture_tracks(tracks, seconds=float(seconds), start=start)
         except Exception:  # noqa: BLE001
             got = {}
         if got:
             import numpy as np
-            out, samples = {}, {}
+            out, samples, frames = {}, {}, {}
             for idx, v in got.items():
-                wav = v["wav"]
+                wav = np.asarray(v["wav"], dtype="float64")
                 mono = wav.mean(axis=1) if wav.ndim > 1 else wav
                 try:
                     nm = str(_bridge("mixer.getTrackName(%d)" % int(idx))).strip("'\"")
                 except OSError:
                     nm = "track_%d" % int(idx)
-                out[str(idx)] = {"file": None, "name": nm, "role": _role(nm),
-                                 "seconds": round(len(mono) / 44100.0, 2),
-                                 "rms": round(float(np.sqrt((mono ** 2).mean())), 5),
-                                 "peak": round(float(np.abs(mono).max()), 4),
-                                 "silent": False, "source": "rt",
-                                 "match_corr": v.get("corr")}
-                samples[idx] = np.asarray(wav, dtype="float64")
-            res = {"tracks": out, "frames": {}, "seconds": float(seconds),
+                item = {"file": None, "name": nm, "role": _role(nm),
+                        "seconds": round(len(mono) / 44100.0, 2),
+                        "rms": round(float(np.sqrt((mono ** 2).mean())), 5),
+                        "peak": round(float(np.abs(mono).max()), 4),
+                        "silent": False, "source": "rt",
+                        "match_corr": v.get("corr")}
+                # лента: те же поля, что и при записи через диск
+                try:
+                    item["tape"] = tape(wav)
+                    item["transients"] = _transients(wav, 44100)
+                    frames[str(idx)] = make_frame(item, wav, fs=44100)
+                except Exception as exc:  # noqa: BLE001
+                    item["frame_error"] = str(exc)[:120]
+                out[str(idx)] = item
+                samples[idx] = wav
+            res = {"tracks": out, "frames": frames, "seconds": float(seconds),
                    "start": start, "mode_used": "rt", "mode": "rt",
                    "clips": {"before": None, "during": None, "after": None},
-                   "take_discarded": 0}
+                   "take_discarded": (woke or {}).get("take_discarded", 0),
+                   "wake": woke}
             if want_audio:
                 res["_samples"] = samples
             return res

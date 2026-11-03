@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import os
 import time
 
 import numpy as np
@@ -134,6 +135,69 @@ def _num(v, default=0.0):
         return float(v)
     except (TypeError, ValueError):
         return default
+
+
+def wake(track: int = 1, seconds: float = 0.4, bridge=None, undo: bool = True) -> dict:
+    """Разбудить движок FL: короткий проход Disk Recording и полная уборка за собой.
+
+    Проверено замером: во время самой записи буферы каналов ещё пустые, а на
+    следующем обычном воспроизведении сигнал появляется и держится до конца
+    сессии. Арм без записи не будит, запись без взведённой дорожки — тоже.
+
+    Что делаем, чтобы не насорить: гасим ``AutoCreateClip``, после прохода
+    возвращаем флаг, удаляем появившиеся WAV и откатываем шаг записи в истории
+    FL. Проект НЕ сохраняется — иначе тейк превратится в клип поверх плейлиста.
+    """
+    try:
+        from . import live
+    except ImportError:
+        import live
+
+    clip_before = live.clip_flag(0)
+    rec_dir = getattr(live, "RECORDED", "")
+    before = set(os.listdir(rec_dir)) if rec_dir and os.path.isdir(rec_dir) else set()
+    hint = live._undo_hint()
+    armed_before = int(_num(live._bridge("mixer.isTrackArmed(%d)" % track)))
+    discarded = 0
+    files = 0
+    try:
+        if not armed_before:
+            live._bridge("mixer.armTrack(%d)" % track)
+        if not int(_num(live._bridge("transport.isRecording()"))):
+            live._bridge("transport.record()")
+        live._bridge("transport.start()")
+        time.sleep(max(0.15, float(seconds)))
+        live._bridge("transport.stop()")
+        if int(_num(live._bridge("transport.isRecording()"))):
+            live._bridge("transport.record()")
+    finally:
+        if not armed_before:
+            try:
+                live._bridge("mixer.armTrack(%d)" % track)
+            except OSError:
+                pass
+        time.sleep(0.35)
+        if rec_dir and os.path.isdir(rec_dir):
+            for name in sorted(set(os.listdir(rec_dir)) - before):
+                try:
+                    os.remove(os.path.join(rec_dir, name))
+                    files += 1
+                except OSError:
+                    pass
+        if undo and hint is not None:
+            try:
+                if live._undo_hint() != hint:
+                    live._bridge("general.undoUpDown(-1)")
+                    discarded = 1
+            except OSError:
+                discarded = -1
+        try:
+            live.clip_flag(int(clip_before.get("before") or 1))
+        except Exception:  # noqa: BLE001
+            pass
+    return {"woke": True, "track": track, "seconds": seconds,
+            "take_discarded": discarded, "files_removed": files,
+            "clip_flag": clip_before.get("before")}
 
 
 class RT:
