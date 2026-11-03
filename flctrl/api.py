@@ -25,6 +25,40 @@ STORE: dict = {}
 _SEQ = {"frame": 0, "change": 0}
 UNDO: list = []
 DRY_RUN = False
+_PROJECT = {"path": None, "parsed": None, "mtime": None}
+
+
+def use_project(path: str | None) -> dict:
+    """Указать файл проекта для точных файловых запросов (темп, плейлист, ноты).
+
+    Живой FL и файл — разные источники: файл даёт точный темп и состав, мост —
+    текущее состояние. Держим оба, но не смешиваем.
+    """
+    if path is None:
+        _PROJECT.update({"path": None, "parsed": None, "mtime": None})
+        return {"project": None}
+    import timebase_file
+    p = str(path).replace("\\", "/")
+    mtime = os.path.getmtime(p)
+    _PROJECT.update({"path": p, "parsed": timebase_file.load(p), "mtime": mtime})
+    return {"project": p, "tempo": _PROJECT["parsed"].tempo,
+            "clips": len(_PROJECT["parsed"].clips)}
+
+
+def _project():
+    """Разобранный проект: из кэша, по mtime, либо по заголовку окна FL."""
+    import timebase_file
+    path = _PROJECT.get("path")
+    if not path:
+        title = _project_name() or ""
+        head = title.split(" - ")[0].strip()
+        if not head.lower().endswith(".flp"):
+            raise ApiError("no_project", error="не указан файл проекта (use_project)")
+        path = head.replace("\\", "/")
+    mtime = os.path.getmtime(path)
+    if _PROJECT.get("parsed") is None or _PROJECT.get("mtime") != mtime:
+        _PROJECT.update({"path": path, "parsed": timebase_file.load(path), "mtime": mtime})
+    return _PROJECT["parsed"]
 
 
 def _next_id(prefix: str) -> str:
@@ -193,6 +227,30 @@ def list_node(path: str = "/", depth: int = 1, fl=None) -> list:
             raise ApiError("unknown_frame", path)
         return STORE[fid]
 
+    if t[0] == "playlist":
+        pr = _project()
+        if len(t) == 1:
+            return {"clips": len(pr.clips), "tracks": len(pr.tracks()), "ppq": pr.ppq}
+        if t[1] == "clip":
+            if len(t) == 2:
+                return [{"id": i, "track": c.track, "kind": "pattern" if c.is_pattern else "audio",
+                         "item": c.item, "start_s": round(pr.seconds_at(c.pos), 3),
+                         "length_s": round(pr.seconds_at(c.length), 3)}
+                        for i, c in enumerate(pr.clips)][:500]
+            try:
+                c = pr.clips[int(t[2])]
+            except (ValueError, IndexError):
+                raise ApiError("path_not_found", path)
+            return {"id": int(t[2]), "track": c.track,
+                    "kind": "pattern" if c.is_pattern else "audio",
+                    "item": c.item, "clip_id": c.clip_id,
+                    "start_s": round(pr.seconds_at(c.pos), 3),
+                    "length_s": round(pr.seconds_at(c.length), 3),
+                    "source_offset_s": round(c.start_offset, 3)}
+
+    if t[0] == "markers":
+        return _project().markers
+
     if t[0] == "section":
         import session_state
         a, b = session_state.get_section()
@@ -216,6 +274,30 @@ def get(path: str, fl=None):
         if t[1] not in STORE:
             raise ApiError("unknown_frame", path)
         return STORE[t[1]]
+    if t[0] == "playlist":
+        pr = _project()
+        if len(t) == 1:
+            return {"clips": len(pr.clips), "tracks": len(pr.tracks()), "ppq": pr.ppq}
+        if t[1] == "clip":
+            if len(t) == 2:
+                return [{"id": i, "track": c.track, "kind": "pattern" if c.is_pattern else "audio",
+                         "item": c.item, "start_s": round(pr.seconds_at(c.pos), 3),
+                         "length_s": round(pr.seconds_at(c.length), 3)}
+                        for i, c in enumerate(pr.clips)][:500]
+            try:
+                c = pr.clips[int(t[2])]
+            except (ValueError, IndexError):
+                raise ApiError("path_not_found", path)
+            return {"id": int(t[2]), "track": c.track,
+                    "kind": "pattern" if c.is_pattern else "audio",
+                    "item": c.item, "clip_id": c.clip_id,
+                    "start_s": round(pr.seconds_at(c.pos), 3),
+                    "length_s": round(pr.seconds_at(c.length), 3),
+                    "source_offset_s": round(c.start_offset, 3)}
+
+    if t[0] == "markers":
+        return _project().markers
+
     if t[0] == "section":
         import session_state
         a_, b_ = session_state.get_section()
@@ -229,12 +311,24 @@ def get(path: str, fl=None):
         return _get_wild(path, fl)
 
     if t[0] == "project":
+        try:
+            pr = _project()
+        except Exception:
+            pr = None
         if len(t) == 1:
-            return {"name": _project_name(), "tempo": fl.state.tempo()}
+            if pr:
+                return {"name": os.path.basename(pr.path), "tempo": pr.tempo,
+                        "time_sig": "%d/%d" % (pr.ts_num, pr.ts_den), "ppq": pr.ppq,
+                        "clips": len(pr.clips), "channels": len(pr.channels),
+                        "source": "file"}
+            return {"name": _project_name(), "tempo": fl.state.tempo(), "source": "bridge"}
         if t[1] == "name":
-            return {"value": _project_name(), "type": "string"}
+            return {"value": os.path.basename(pr.path) if pr else _project_name(),
+                    "type": "string"}
         if t[1] == "tempo":
-            return {"value": fl.state.tempo(), "type": "float", "unit": "BPM"}
+            v = pr.tempo if pr else fl.state.tempo()
+            return {"value": v, "type": "float", "unit": "BPM",
+                    "source": "file" if pr else "bridge"}
 
     if t[0] == "transport":
         tr = _transport(fl)
@@ -454,9 +548,17 @@ def call(op: str, args: dict | None = None, fl=None) -> dict:
         target = _avg_metrics([_metrics_of(p, a0, b0) for p in against])
         loaded, fs = {}, None
         for role, path in stems.items():
-            x, fs_i = invmix.load(path, a.get("max_seconds"))
+            # грузим целиком и режем по окну: брать «первые N секунд» нельзя —
+            # у трека там может быть тишина, и задача становится вырожденной
+            x, fs_i = invmix.load(path)
             if fs is None:
                 fs = fs_i
+            if a0 or b0:
+                lo = int((a0 or 0.0) * fs)
+                hi = int((b0 or (len(x) / fs)) * fs)
+                x = x[lo:hi] if hi > lo else x
+            elif a.get("max_seconds"):
+                x = x[:int(float(a["max_seconds"]) * fs)]
             loaded[role] = x
         loaded = invmix.align(*loaded.values())
         # Калибровка: абсолютный уровень наших дорожек и референса разный, а
@@ -478,6 +580,18 @@ def call(op: str, args: dict | None = None, fl=None) -> dict:
     if op == "record.start" or op == "record.stop":
         raise ApiError("not_available", op,
                        error="запись дорожек появится с tap (см. SPEC §9)")
+
+    if op == "clip.at":
+        pr = _project()
+        sec = a.get("seconds")
+        if sec is None and a.get("bar") is not None:
+            sec = float(a["bar"]) * 4.0 * pr.beat_seconds
+        if sec is None:
+            raise ApiError("bad_args", op, need=["seconds или bar"])
+        lines = pr.active_at(pr.ticks_at(float(sec)))
+        return {"seconds": round(float(sec), 3),
+                "bar": round(float(sec) / (4.0 * pr.beat_seconds), 2),
+                "tempo": pr.tempo, "active": lines, "count": len(lines)}
 
     if op == "system.health":
         return fl.state.health()
