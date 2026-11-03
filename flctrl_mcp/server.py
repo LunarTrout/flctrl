@@ -377,9 +377,20 @@ def fl_help(what: str | None = None) -> dict:
 
 
 @tool
-def fl_measure(spec: dict) -> dict:
-    """Картина по файлам: {"metric":"bands","source":path,"a":..,"b":..} → кадр."""
+def fl_measure(spec: dict | None = None, path: str | None = None,
+               a: float = 0.0, b: float = 30.0) -> dict:
+    """Картина по файлам: {"metric":"bands","source":path,"a":..,"b":..} → кадр.
+
+    Старая форма `fl_measure(path, a, b)` тоже работает: она отдаёт замер через
+    pyphony. Это на случай, если модель помнит прежний вызов.
+    """
     import api
+    if isinstance(spec, str):      # старая форма: fl_measure(path, a, b)
+        spec, path = None, spec
+    if spec is None:
+        if not path:
+            raise ValueError("нужен spec {metric, source} или path")
+        return hear("measure", path, "--a", str(a), "--b", str(b))
     return api.measure(spec)
 
 
