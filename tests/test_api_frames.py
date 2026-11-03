@@ -71,6 +71,11 @@ def main() -> int:
           str(r["compare"]["stats"]["outside"]))
     check("отчёт перечисляет референсы", len(r["refs"]) == 2, str(r["refs"]))
 
+    rl = api.roles_for(["/x/Drums_bus.wav", "/x/BASS DI.wav", "/x/vox_main.wav",
+                        "/x/unknown_thing.wav"])
+    check("роли по именам", list(rl)[:3] == ["drums", "bass", "vocals"], str(list(rl)))
+    check("неизвестное уходит в other", "other" in rl, str(list(rl)))
+
     try:
         api.measure({"metric": "bands", "source": "live"})
         check("живой источник честно отказывает", False, "приняло live")

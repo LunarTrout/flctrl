@@ -566,9 +566,12 @@ def measure(spec: dict) -> dict:
                        metric, spec)
 
     if by == "role":
-        stems = spec.get("stems") or {}
+        stems = spec.get("stems")
         if not stems:
-            raise ApiError("bad_spec", error="by=role требует stems {роль: путь}")
+            stems = roles_for(sources) if sources else {}
+        if not stems:
+            raise ApiError("bad_spec",
+                           error="by=role требует stems {роль: путь} или sources")
         roles = list(stems)
         rows = []
         for role in roles:
@@ -643,6 +646,21 @@ def measure(spec: dict) -> dict:
     raise ApiError("unknown_metric", metric,
                    known=["bands", "rms", "peak", "crest", "lufs", "transients",
                           "harmony", "wall", "sii", "partial"])
+
+
+def roles_for(sources: list) -> dict:
+    """Разложить файлы по ролям: имя → спектр → other.
+
+    Нужна, чтобы «по ролям» работало без ручного словаря: роли определяются
+    тем же модулем, что и в остальной библиотеке.
+    """
+    import roles
+    out: dict = {}
+    for i, path in enumerate(sources):
+        role = roles.role_of(os.path.basename(str(path)), str(path))
+        key = role if role not in out else "%s_%d" % (role, i)
+        out[key] = path
+    return out
 
 
 def _finish(frame: dict, metric: str, spec: dict) -> dict:
