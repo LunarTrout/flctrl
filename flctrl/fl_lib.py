@@ -283,7 +283,7 @@ class _State:
         import time
         out = {"fl_running": False, "bridge": False, "tracks": None,
                "latency_ms": None, "pid": None, "project": None,
-               "live_stand": False, "hint": ""}
+               "live_stand": False, "responsive": None, "hint": ""}
         try:
             r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq FL64.exe", "/FO", "CSV"],
                                capture_output=True, timeout=20)
@@ -300,6 +300,8 @@ class _State:
             try:
                 import render_job
                 out["project"] = render_job.window_title()
+                # повисшая FL не отвечает на WM_NULL и не закрывается штатно
+                out["responsive"] = render_job.fl_is_responsive()
             except Exception:
                 pass
         try:
@@ -316,6 +318,9 @@ class _State:
             pass
         if not out["fl_running"]:
             out["hint"] = "FL Studio не запущена"
+        elif out["responsive"] is False:
+            out["hint"] = ("UI-поток FL не отвечает: окно не закроется, контроллер молчит. "
+                           "Снять процесс и открыть проект заново (reset_fl.py).")
         elif not out["bridge"]:
             out["hint"] = (
                 "FL запущена, но контроллер не отвечает. "

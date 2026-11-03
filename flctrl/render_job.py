@@ -62,6 +62,136 @@ def window_title() -> str:
     return buf.value
 
 
+def _fl_pids() -> set:
+    import subprocess
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq FL64.exe", "/FO", "CSV", "/NH"],
+                             capture_output=True, timeout=20).stdout.decode("cp866", "ignore")
+    except Exception:
+        return set()
+    pids = set()
+    for line in out.splitlines():
+        parts = [p.strip('"') for p in line.split('","')]
+        if len(parts) >= 2 and parts[1].isdigit():
+            pids.add(int(parts[1]))
+    return pids
+
+
+def _fl_dialogs() -> list:
+    """Модальные окна диалогов, принадлежащие процессу FL."""
+    import ctypes
+    from ctypes import wintypes
+
+    u = ctypes.windll.user32
+    pids = _fl_pids()
+    found = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    def cb(hwnd, _):
+        cls = ctypes.create_unicode_buffer(64)
+        u.GetClassNameW(hwnd, cls, 64)
+        if cls.value != "#32770":
+            return True
+        pid = wintypes.DWORD()
+        u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value in pids:
+            n = u.GetWindowTextLengthW(hwnd)
+            buf = ctypes.create_unicode_buffer(max(n + 1, 2))
+            u.GetWindowTextW(hwnd, buf, max(n + 1, 2))
+            found.append((hwnd, buf.value))
+        return True
+
+    u.EnumWindows(cb, 0)
+    return found
+
+
+def fl_is_responsive(timeout_ms: int = 1500) -> bool:
+    """Отвечает ли UI-поток FL: WM_NULL через SendMessageTimeout.
+
+    Если не отвечает — FL повисла (обычно на живом вызове через Frida), и
+    штатное закрытие невозможно: WM_CLOSE просто не обрабатывается.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    u = ctypes.windll.user32
+    hwnd = u.FindWindowW(ctypes.c_wchar_p("TFruityLoopsMainForm"), None)
+    if not hwnd:
+        return not fl_running()
+    res = ctypes.c_size_t()
+    u.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                      wintypes.LPARAM, wintypes.UINT, wintypes.UINT,
+                                      ctypes.POINTER(ctypes.c_size_t)]
+    ok = u.SendMessageTimeoutW(hwnd, 0x0000, 0, 0, 0x0002, timeout_ms, ctypes.byref(res))
+    return bool(ok)
+
+
+def fl_msg_dialogs() -> list:
+    """Висящие окна «Confirm» (TMsgForm) процесса FL: они блокируют закрытие."""
+    import ctypes
+    from ctypes import wintypes
+
+    u = ctypes.windll.user32
+    pids = _fl_pids()
+    out = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    def cb(hwnd, _):
+        pid = wintypes.DWORD()
+        u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value not in pids:
+            return True
+        cls = ctypes.create_unicode_buffer(64)
+        u.GetClassNameW(hwnd, cls, 64)
+        if cls.value in ("TMsgForm", "#32770") and u.IsWindowVisible(hwnd):
+            out.append(hwnd)
+        return True
+
+    u.EnumWindows(cb, 0)
+    return out
+
+
+def dismiss_fl_dialogs(max_rounds: int = 12) -> int:
+    """Снять висящие окна Confirm: Enter в каждом, пока они не кончатся."""
+    import ctypes
+    import time
+
+    u = ctypes.windll.user32
+    closed = 0
+    for _ in range(max_rounds):
+        dialogs = fl_msg_dialogs()
+        if not dialogs:
+            break
+        for hwnd in dialogs:
+            u.SetForegroundWindow(hwnd)
+            u.keybd_event(0x0D, 0, 0, 0)      # VK_RETURN down
+            u.keybd_event(0x0D, 0, 2, 0)      # VK_RETURN up
+            time.sleep(0.25)
+            closed += 1
+        time.sleep(0.4)
+    return closed
+
+
+def _press_enter(hwnd: int) -> None:
+    import ctypes
+    u = ctypes.windll.user32
+    u.PostMessageW(hwnd, 0x0100, 0x0D, 0)      # WM_KEYDOWN VK_RETURN
+    u.PostMessageW(hwnd, 0x0101, 0x0D, 0)      # WM_KEYUP
+
+
+def render_target(flp: str, out_name: str | None = None, fmt: str = "wav") -> str:
+    """Куда FL должна положить рендер: всегда абсолютный путь с расширением.
+
+    Относительное имя («render») FL принимает и молча ничего не пишет —
+    проверено: код возврата 0, файла нет. С абсолютным путём рендер идёт.
+    """
+    project_dir = os.path.dirname(os.path.abspath(flp))
+    out = out_name or (os.path.splitext(os.path.basename(flp))[0] + "_render")
+    if not os.path.splitext(out)[1]:
+        out += "." + fmt
+    return out if os.path.isabs(out) else os.path.join(project_dir, out)
+
+
 def close_fl(timeout_s: float = 90.0, save_first: bool = True) -> bool:
     """Закрыть FL штатно (как File → Exit), без kill.
 
@@ -89,11 +219,35 @@ def close_fl(timeout_s: float = 90.0, save_first: bool = True) -> bool:
         h = ctypes.windll.user32.FindWindowW(ctypes.c_wchar_p("TFruityLoopsMainForm"), None)
         if h:
             ctypes.windll.user32.PostMessageW(h, 0x0010, 0, 0)
+    # Сначала снимаем висящие Confirm: с ними WM_CLOSE не доходит до формы,
+    # и FL остаётся висеть до принудительного снятия.
+    dismissed = dismiss_fl_dialogs()
+    if dismissed:
+        print("снято окон подтверждения: %d" % dismissed)
+
+    # Повисшая FL не обрабатывает WM_CLOSE: её UI-поток занят. Держать её
+    # бессмысленно — снимаем и говорим об этом прямо.
+    if not fl_is_responsive(2000):
+        import subprocess
+        print("FL не отвечает (UI занят) — снимаю принудительно", flush=True)
+        subprocess.run(["taskkill", "/F", "/IM", "FL64.exe"], capture_output=True, timeout=30)
+        time.sleep(2.0)
+        return not fl_running()
+
     started = time.time()
     last_poke = started
+    handled: set = set()
     while time.time() - started < timeout_s:
         if not fl_running():
             return True
+        # Закрытию может мешать модальный диалог («сохранить изменения?», «плагин
+        # не найден»). Тогда WM_CLOSE не доходит до формы, и FL висит до kill.
+        # Жмём Enter в диалоге: по умолчанию это «да»/«сохранить».
+        for hwnd, title in _fl_dialogs():
+            if hwnd in handled:
+                continue
+            handled.add(hwnd)
+            _press_enter(hwnd)
         # окно могло не принять первое сообщение (например, был открыт диалог)
         if time.time() - last_poke > 10:
             last_poke = time.time()
@@ -106,6 +260,11 @@ def close_fl(timeout_s: float = 90.0, save_first: bool = True) -> bool:
             except Exception:
                 pass
         time.sleep(1.5)
+    if not fl_is_responsive(1500):
+        import subprocess
+        print("закрытие не сработало, FL не отвечает — снимаю принудительно", flush=True)
+        subprocess.run(["taskkill", "/F", "/IM", "FL64.exe"], capture_output=True, timeout=30)
+        time.sleep(2.0)
     return not fl_running()
 
 
@@ -189,15 +348,10 @@ def render(flp: str, fmt: str = "wav", timeout_s: float = 3600,
         if not close_fl():
             raise RuntimeError("FL не закрылась штатно")
 
-    # FL понимает /R как папку или как имя файла: если передали каталог,
-    # результат уйдёт туда, иначе — в папку проекта с именем проекта.
-    out = out_name or "render"
-    target_dir = out if os.path.isabs(out) else os.path.join(project_dir, out)
-    if not os.path.splitext(out)[1]:
-        os.makedirs(target_dir, exist_ok=True)
-        search_dirs = [target_dir, project_dir]
-    else:
-        search_dirs = [os.path.dirname(target_dir) or project_dir, project_dir]
+    target_path = render_target(flp, out_name, fmt)
+    target_dir = os.path.dirname(target_path)
+    os.makedirs(target_dir, exist_ok=True)
+    search_dirs = [target_dir, project_dir]
 
     def collect() -> dict:
         found = {}
@@ -207,7 +361,7 @@ def render(flp: str, fmt: str = "wav", timeout_s: float = 3600,
 
     before = collect()
     started = time.time()
-    args = [FL_EXE, "/E" + fmt, "/R" + out, flp]
+    args = [FL_EXE, "/E" + fmt, "/R" + target_path, flp]
     subprocess.Popen(args, cwd=os.path.dirname(FL_EXE),
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
