@@ -155,8 +155,11 @@ def capture(seconds: float, fs: int = 48000, device: str | None = None) -> np.nd
 
 
 def solo_only(track: int) -> None:
-    """Оставить звучащей только нужную дорожку."""
-    call("__import__('json').dumps([mixer.muteTrack(i, i != %d) "
+    """Оставить звучащей только нужную дорожку.
+
+    Мастер (0) не глушим никогда: если замьютить сумму, на выходе будет тишина.
+    """
+    call("__import__('json').dumps([mixer.muteTrack(i, (i != %d) and (i != 0)) "
          "for i in range(mixer.trackCount())])" % track)
 
 
