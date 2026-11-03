@@ -95,6 +95,36 @@ def main() -> int:
     check("план ограничен по длине",
           res["count"] <= 12 and res["count"] == len(edits), "правок %d" % res["count"])
 
+    # контроль усиления: только подъёмы → предупреждение; подъём со срезом → нет
+    only_up = decide.plan({
+        "stems": {"a": {"share_pct": 20.0, "sections": [
+            {"t": 0, "active": True, "share": {"mid": 0.8}, "regions": {"mid": 0.1},
+             "snr": {"mid": -6.0}}]}},
+    }, cap_db=3.0, min_deficit_db=1.0, min_share_pct=0.1,
+        targets={"other": {"mid": 0.0}}, roles_map={"a": "other"})
+    check("только подъёмы — предупреждение",
+          only_up["gain_staging"]["warn"] is True
+          and only_up["gain_staging"]["boosts"] >= 1,
+          "%+.2f дБ" % only_up["gain_staging"]["net_db"])
+
+    balanced = decide.plan({
+        "stems": {
+            "a": {"share_pct": 20.0, "sections": [
+                {"t": 0, "active": True, "share": {"mid": 0.8}, "regions": {"mid": 0.1},
+                 "snr": {"mid": -6.0}}]},
+            "b": {"share_pct": 20.0, "sections": [
+                {"t": 0, "active": True, "share": {"mid": 0.8}, "regions": {"mid": 0.8},
+                 "snr": {"mid": +6.0}}]},
+        },
+    }, cap_db=3.0, min_deficit_db=1.0, min_share_pct=0.1,
+        targets={"other": {"mid": 0.0}}, roles_map={"a": "other", "b": "other"})
+    check("подъём со срезом гасит друг друга",
+          balanced["gain_staging"]["warn"] is False
+          and balanced["gain_staging"]["cuts"] >= 1,
+          "%+.2f дБ (подъёмов %d, срезов %d)" % (
+              balanced["gain_staging"]["net_db"], balanced["gain_staging"]["boosts"],
+              balanced["gain_staging"]["cuts"]))
+
     pad = [e for e in edits if e["stem"] == "pad"]
     check("путь по отношению к миксу используется",
           bool(pad) and pad[0]["basis"] == "snr", pad[0]["basis"] if pad else "нет")

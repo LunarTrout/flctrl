@@ -123,6 +123,7 @@ def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
             "sections": times,
             "span": [min(times), max(times)],
             "n_sections": len(rows),
+            "content": round(content, 3),
             "impact": round(abs(deficit_db) * content, 4),
             "why": ("«%s» на %.0f–%.0f с: %s" % (
                 REGION_LABELS.get(region, region), min(times), max(times),
@@ -133,9 +134,24 @@ def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
         })
     edits.sort(key=lambda e: -e["impact"])
     total = len(edits)
-    return {"edits": edits[:max_edits], "skipped": skipped,
+    chosen = edits[:max_edits]
+    # контроль усиления: правки не должны просто «поднять всё».
+    # Оценка — по доле энергии полосы: подъём в плотной полосе весит больше.
+    net_db = sum(e["do_db"] * max(e["content"], 0.0) for e in chosen)
+    boosts = [e for e in chosen if e["do_db"] > 0]
+    cuts = [e for e in chosen if e["do_db"] < 0]
+    return {"edits": chosen, "skipped": skipped,
             "target": target, "cap_db": cap_db, "target_snr_db": target_snr_db,
-            "count": min(total, max_edits), "found": total}
+            "count": len(chosen), "found": total,
+            "gain_staging": {
+                "net_db": round(net_db, 2),
+                "boosts": len(boosts), "cuts": len(cuts),
+                "warn": net_db > 2.0,
+                "hint": ("правки поднимут микс примерно на %.1f дБ — "
+                         "скомпенсируй мастером или срезами" % net_db
+                         if net_db > 2.0 else
+                         "суммарный подъём %.1f дБ — в пределах разумного" % net_db),
+            }}
 
 
 def main(argv=None) -> int:
