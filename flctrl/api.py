@@ -614,6 +614,21 @@ def call(op: str, args: dict | None = None, fl=None) -> dict:
         out = simulate.simulate(mix, stems, edits, a.get("outdir"))
         return out
 
+    if op == "tap.levels":
+        import tap
+        with tap.Tap() as t:
+            return t.levels(a.get("tracks"), float(a.get("seconds", 1.0)),
+                            float(a.get("rate_hz", 120.0)))
+
+    if op == "tap.record":
+        import tap
+        tracks = a.get("tracks")
+        if not tracks:
+            raise ApiError("bad_args", op, need=["tracks"])
+        outdir = a.get("outdir") or os.path.join(os.environ.get("TEMP", "."), "fltap")
+        with tap.Tap() as t:
+            return t.record([int(x) for x in tracks], float(a.get("seconds", 2.0)), outdir)
+
     if op == "pan.plan":
         import panplan
         stems = a.get("stems") or {}
@@ -990,6 +1005,8 @@ OPS_HELP = {
     "eq.set": "{track, slot, gains} — полосы эквалайзера",
     "clip.at": "{seconds|bar} — что звучит в этот момент (локальное время источников)",
     "inverse.solve": "{stems, against, cap_db} — обратная задача: гейны под цели микса",
+    "tap.levels": "{tracks?, seconds?, rate_hz?} — живой RMS/пик по дорожкам",
+    "tap.record": "{tracks, seconds, outdir?} — писать дорожки в WAV",
     "pan.plan": "{stems, a, b, section_s} — план панорамы по секциям",
     "pan.check": "{plan} — проверка шага и зеркальности",
     "pan.move": "{track, points:[[t,pan]], seconds, rate_hz} — вести панораму вживую",
