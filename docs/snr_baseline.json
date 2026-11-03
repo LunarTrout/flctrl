@@ -1,0 +1,169 @@
+{
+ "roles": {
+  "bass": {
+   "sub": {
+    "median": -1.1,
+    "n": 1
+   },
+   "bass": {
+    "median": -5.2,
+    "n": 1
+   },
+   "lowmid": {
+    "median": -6.2,
+    "n": 1
+   },
+   "mid": {
+    "median": -31.9,
+    "n": 1
+   },
+   "upmid": {
+    "median": -46.0,
+    "n": 1
+   },
+   "pres": {
+    "median": -47.5,
+    "n": 1
+   },
+   "air": {
+    "median": -50.7,
+    "n": 1
+   }
+  },
+  "drums": {
+   "sub": {
+    "median": -3.8,
+    "n": 1
+   },
+   "bass": {
+    "median": -0.3,
+    "n": 1
+   },
+   "lowmid": {
+    "median": -4.8,
+    "n": 1
+   },
+   "mid": {
+    "median": -12.6,
+    "n": 1
+   },
+   "upmid": {
+    "median": -19.8,
+    "n": 1
+   },
+   "pres": {
+    "median": -7.1,
+    "n": 1
+   },
+   "air": {
+    "median": -3.4,
+    "n": 1
+   }
+  },
+  "other": {
+   "sub": {
+    "median": -25.8,
+    "n": 1
+   },
+   "bass": {
+    "median": -14.2,
+    "n": 1
+   },
+   "lowmid": {
+    "median": -5.3,
+    "n": 1
+   },
+   "mid": {
+    "median": -1.8,
+    "n": 1
+   },
+   "upmid": {
+    "median": 0.6,
+    "n": 1
+   },
+   "pres": {
+    "median": -3.1,
+    "n": 1
+   },
+   "air": {
+    "median": -11.3,
+    "n": 1
+   }
+  },
+  "vocals": {
+   "sub": {
+    "median": -43.0,
+    "n": 1
+   },
+   "bass": {
+    "median": -45.0,
+    "n": 1
+   },
+   "lowmid": {
+    "median": -21.6,
+    "n": 1
+   },
+   "mid": {
+    "median": -1.0,
+    "n": 1
+   },
+   "upmid": {
+    "median": -4.3,
+    "n": 1
+   },
+   "pres": {
+    "median": -13.8,
+    "n": 1
+   },
+   "air": {
+    "median": -6.9,
+    "n": 1
+   }
+  }
+ },
+ "tracks": [
+  {
+   "mix": "C:/Users/epicc/Desktop/PROJECTS/vers1/_refs/corpus\\wintersun_Wintersun - Wintersun⧸02 - Winter Madnes.mp3",
+   "roles": {
+    "drums": {
+     "sub": -3.8,
+     "bass": -0.3,
+     "lowmid": -4.8,
+     "mid": -12.6,
+     "upmid": -19.8,
+     "pres": -7.1,
+     "air": -3.4
+    },
+    "bass": {
+     "sub": -1.1,
+     "bass": -5.2,
+     "lowmid": -6.2,
+     "mid": -31.9,
+     "upmid": -46.0,
+     "pres": -47.5,
+     "air": -50.7
+    },
+    "vocals": {
+     "sub": -43.0,
+     "bass": -45.0,
+     "lowmid": -21.6,
+     "mid": -1.0,
+     "upmid": -4.3,
+     "pres": -13.8,
+     "air": -6.9
+    },
+    "other": {
+     "sub": -25.8,
+     "bass": -14.2,
+     "lowmid": -5.3,
+     "mid": -1.8,
+     "upmid": 0.6,
+     "pres": -3.1,
+     "air": -11.3
+    }
+   }
+  }
+ ],
+ "section_s": 10.0,
+ "note": "гитары и клавиши попадают в other — разделение корпуса не различает их; цели для guitar/keys берутся у other"
+}

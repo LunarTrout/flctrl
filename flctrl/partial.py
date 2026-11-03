@@ -238,7 +238,14 @@ def _attribute_mg(mix_path: str, stems: dict[str, str], a: float | None = None,
     for name, path in stems.items():
         x, fs_s = _read(path, a, b)
         if fs_s != fs:
-            raise ValueError("стем %s c другой частотой: %d vs %d" % (name, fs_s, fs))
+            # стем мог быть отрендерен в другой частоте — приводим к миксу,
+            # иначе полоса выше половины меньшей частоты просто отсутствует
+            from math import gcd
+
+            from scipy.signal import resample_poly
+
+            g = gcd(int(fs_s), int(fs))
+            x = resample_poly(x, fs // g, fs_s // g)
         x = _align(x, n)
         lv_raw, _ = bands29(x, fs)
         lv = lv_raw + offset

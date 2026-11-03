@@ -471,21 +471,54 @@ def fl_sii(vocal: str, masker: str) -> dict:
 @tool
 def fl_decide(mix_path: str, stems: dict, a: float | None = None,
               b: float | None = None, target: float = 0.6,
-              cap_db: float = 3.0, section_s: float = 5.0) -> dict:
+              cap_db: float = 3.0, section_s: float = 5.0,
+              targets_path: str | None = None) -> dict:
     """Точные правки: где, в какой полосе и на сколько дБ (по секциям).
 
     Считает слышимость по ISO 532-2 в каждой секции и каждой области, затем
     переводит недостаток в децибелы. Полосы, где инструмент вообще не звучит,
     не трогаются; одна правка ограничена капом.
+
+    `targets_path` — JSON целей из корпуса (`docs/snr_baseline.json`). Без него
+    цель учебная: «быть наравне с остальным».
     """
     import decide
     import partial
+    import roles as roles_mod
+    import snrtargets
 
     attr = partial.attribute_mg(mix_path, stems, a, b, section_s=section_s)
-    res = decide.plan(attr, target=target, cap_db=cap_db)
-    res["audibility"] = {k: {"audib": v["audib"], "share_pct": v["share_pct"]}
+    roles_map = {name: roles_mod.role_of(name, path) for name, path in stems.items()}
+    tg = {}
+    if targets_path:
+        model = snrtargets.load(targets_path)
+        for name, role in roles_map.items():
+            t = snrtargets.for_role(model, role)
+            if t:
+                tg[role] = t
+    res = decide.plan(attr, target=target, cap_db=cap_db,
+                      targets=tg or None, roles_map=roles_map)
+    res["audibility"] = {k: {"audib": v["audib"], "share_pct": v["share_pct"],
+                             "role": roles_map.get(k)}
                          for k, v in attr["stems"].items()}
+    res["targets_used"] = bool(tg)
     return res
+
+
+@tool
+def fl_snr_targets(refs: list[str], out: str, b: float = 60.0,
+                   section_s: float = 10.0) -> dict:
+    """Собрать жанровые цели по полосам: список «микс.mp3:папка_стемов»."""
+    import snrtargets
+
+    pairs = snrtargets._parse_pairs(refs)
+    if not pairs:
+        return {"error": "ни одной пары «микс:стемы» не разобрано"}
+    model = snrtargets.build(pairs, 0.0, b, section_s)
+    import json as _json
+    with open(out, "w", encoding="utf-8") as f:
+        _json.dump(model, f, ensure_ascii=False, indent=1)
+    return {"saved": out, "roles": list(model["roles"]), "tracks": len(pairs)}
 
 
 @tool

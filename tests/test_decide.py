@@ -50,7 +50,7 @@ def main() -> int:
             "bass": {"share_pct": 15.0, "sections": [
                 # бас в «воздухе» не звучит: чинить там нечего
                 {"t": 0, "active": True, "share": {"air": 0.001, "bass": 0.7},
-                 "regions": {"air": 0.00, "bass": 0.20}},
+                 "regions": {"air": 0.00, "bass": 0.20}, "snr": {"air": -60.0, "bass": -9.0}},
             ]},
             "hiss": {"share_pct": 0.5, "sections": [
                 {"t": 0, "active": True, "share": {"air": 0.9},
@@ -103,6 +103,17 @@ def main() -> int:
           str((pad[0]["need_db"], pad[0]["do_db"])) if pad else "")
     check("секции склеены в один участок",
           bool(pad) and pad[0]["n_sections"] == 2 and pad[0]["span"] == [0, 8], "")
+
+    # цели из корпуса: роль bass в середине должна быть на 6 дБ ниже остального
+    res_t = decide.plan(attr, cap_db=10.0, min_deficit_db=0.5,
+                        targets={"bass": {"bass": -4.0}}, roles_map={"bass": "bass"})
+    bass_edit = [e for e in res_t["edits"] if e["stem"] == "bass" and e["region"] == "bass"]
+    check("цель из корпуса применяется",
+          bool(bass_edit) and bass_edit[0]["goal_db"] == -4.0
+          and abs(bass_edit[0]["need_db"] - (-4.0 - bass_edit[0]["snr_db"])) < 0.05,
+          str((bass_edit[0]["goal_db"], bass_edit[0]["snr_db"],
+               bass_edit[0]["need_db"])) if bass_edit else "нет")
+    check("роль определена", bool(bass_edit) and bass_edit[0]["role"] == "bass", "")
 
     print("\nитог: %d прошло, %d упало" % (len(passed), len(failed)))
     return 1 if failed else 0

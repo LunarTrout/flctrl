@@ -35,7 +35,8 @@ def need_db(a: float, target: float) -> float:
 def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
          min_share_pct: float = 3.0, min_deficit: float = 0.05,
          min_region_share: float = 0.05, max_edits: int = 12,
-         target_snr_db: float = 0.0, min_deficit_db: float = 1.0) -> dict:
+         target_snr_db: float = 0.0, min_deficit_db: float = 1.0,
+         targets: dict | None = None, roles_map: dict | None = None) -> dict:
     """План правок: одна строка на «инструмент × полоса», с участком времени.
 
     Два пути:
@@ -49,6 +50,8 @@ def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
     """
     import statistics
 
+    import roles as roles_mod
+
     groups: dict = {}
     skipped = []
     for name, row in (attr.get("stems") or {}).items():
@@ -56,6 +59,7 @@ def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
         if not sections:
             skipped.append({"stem": name, "why": "нет разбивки по секциям"})
             continue
+        role = (roles_map or {}).get(name) or roles_mod.by_name(name) or "other"
         share = row.get("share_pct", 0.0)
         if share < min_share_pct:
             skipped.append({"stem": name,
@@ -68,10 +72,11 @@ def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
                 content = (sec.get("share") or {}).get(region, 1.0)
                 if content < min_region_share:
                     continue          # инструмент здесь не звучит — не наша забота
+                goal = (targets or {}).get(role, {}).get(region, target_snr_db)
                 snr = (sec.get("snr") or {}).get(region)
                 if snr is not None:
-                    deficit_db = target_snr_db - float(snr)
-                    if abs(deficit_db) < min_deficit_db:
+                    deficit_db = goal - float(snr)
+                    if abs(deficit_db) < min_deficit_db - 1e-9:
                         continue
                 else:
                     deficit_db = None
@@ -79,7 +84,8 @@ def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
                         continue
                 groups.setdefault((name, region), []).append(
                     {"t": sec["t"], "audib": a, "content": content,
-                     "snr": snr, "deficit_db": deficit_db})
+                     "snr": snr, "deficit_db": deficit_db, "goal": goal,
+                     "role": role})
 
     edits = []
     for (name, region), rows in groups.items():
@@ -103,9 +109,11 @@ def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
         capped = max(-cap_db, min(cap_db, raw))
         edits.append({
             "stem": name,
+            "role": rows[0].get("role"),
             "region": region,
             "region_label": REGION_LABELS.get(region, region),
             "basis": basis,
+            "goal_db": rows[0].get("goal"),
             "audib": audib,
             "snr_db": snr_med,
             "deficit": round(deficit_db, 3),
@@ -118,7 +126,8 @@ def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
             "impact": round(abs(deficit_db) * content, 4),
             "why": ("«%s» на %.0f–%.0f с: %s" % (
                 REGION_LABELS.get(region, region), min(times), max(times),
-                ("инструмент на %+.1f дБ относительно остального микса" % snr_med
+                ("инструмент на %+.1f дБ относительно остального микса, цель %+.1f"
+                 % (snr_med, rows[0].get("goal", 0.0))
                  if basis == "snr" else
                  "слышимость %.2f при цели %.2f" % (a_med, target)))),
         })
