@@ -178,7 +178,7 @@ def _maybe_reload() -> bool:
 # Полный набор — переменная окружения FLCTRL_MCP_FULL=1.
 FULL = os.environ.get("FLCTRL_MCP_FULL", "0").lower() in ("1", "true", "yes")
 COMPACT_NAMES = {"fl_list", "fl_get", "fl_set", "fl_call", "fl_measure",
-                 "fl_compare", "fl_help", "fl_undo", "fl_dry_run"}
+                 "fl_compare", "fl_help", "fl_undo", "fl_dry_run", "fl_project"}
 
 
 def tool(fn):
@@ -384,10 +384,19 @@ def fl_measure(spec: dict) -> dict:
 
 
 @tool
-def fl_compare(a: dict, b: dict, top: int | None = None) -> dict:
-    """Сравнить два кадра: дельты по осям, отсортированные по модулю."""
+def fl_compare(a, b, top: int | None = None):
+    """Сравнить два кадра или их id: дельты по осям, по модулю."""
     import api
     return api.compare(a, b, top)
+
+
+@tool
+def fl_project(path: str | None = None) -> dict:
+    """Разобрать .flp: точный темп, размер, клипы, каналы. Без path — сводка."""
+    import api
+    if path:
+        api.use_project(path)
+    return api.get("/project")
 
 
 @tool
@@ -551,8 +560,8 @@ def fl_set_route(track: int, dest: int, level: float) -> dict:
 # ---------------------------------------------------------------- слух
 
 @tool
-def fl_measure(path: str, a: float = 0.0, b: float = 30.0) -> dict:
-    """Замер отрезка: соны, фоны, резкость, LUFS, crest, LDR, области, стерео."""
+def fl_hear_measure(path: str, a: float = 0.0, b: float = 30.0) -> dict:
+    """Замер отрезка через pyphony: соны, фоны, резкость, LUFS, crest, LDR."""
     return hear("measure", path, "--a", str(a), "--b", str(b))
 
 
