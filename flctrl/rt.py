@@ -37,14 +37,17 @@ function add(map, key, buf, n, idx) {
   try {
     const f = new Float32Array(buf.readByteArray(n * 8));
     c.chunks.push(f); c.frames += n;
-    let s = 0, m = 0;
-    for (let i = 0; i < f.length; i++) { s += f[i] * f[i]; const a = Math.abs(f[i]); if (a > m) m = a; }
-    c.sum += s; if (m > c.peak) c.peak = m;
+    let s2 = 0, m = 0;
+    for (let i = 0; i < f.length; i++) { s2 += f[i] * f[i]; const a = Math.abs(f[i]); if (a > m) m = a; }
+    c.sum += s2; if (m > c.peak) c.peak = m;
   } catch (e) { S.bad++; }
 }
 
 rpc.exports = {
   setup: function () {
+    // ставим хуки отложенно: синхронный attach на горячей функции вешает загрузку скрипта
+    setImmediate(function () {
+    // пост-FX источник сложения: rcx = [obj+0x16C], r8d = кадры*2. Копируем ровно блок.
     Interceptor.attach(fe.base.add(0x849287), {
       onEnter: function () {
         if (!S.on) return;
@@ -71,6 +74,38 @@ rpc.exports = {
         if (buf.isNull()) return;
         add(S.pre, String(idx), buf, n, idx);
       }
+    });
+    // route-путь: FX применяется к [route+8] внутри FE+0x82F0B0, индекс дорожки — [track+0x160]
+    Interceptor.attach(fe.base.add(0x82F0B0), {
+      onEnter: function () { if (!S.on) return; try { this.route = ptr(this.context.rcx); } catch (e) { this.route = null; } },
+      onLeave: function () {
+        if (!S.on || !this.route) return;
+        try {
+          const track = this.route.add(0x38).readPointer();
+          const idx = track.add(0x160).readU32();
+          const buf = this.route.add(8).readPointer();
+          let n = this.route.add(0x48).readU32();
+          if (!n || n > 8192) n = chunkN();
+          if (!n || buf.isNull() || idx > 512) return;
+          add(S.post, 't' + idx, buf, n, idx);
+        } catch (e) { S.bad++; }
+      }
+    });
+    // per-track PDC-копия: [track+0x34] -> буфер шины, на входе копии уже обработанный звук
+    Interceptor.attach(fe.base.add(0x85250C), {
+      onEnter: function () {
+        if (!S.on) return;
+        try {
+          const src = ptr(this.context.rcx);
+          let n = (this.context.r8 >> 1) >>> 0;
+          if (!n || n > 8192) n = chunkN();
+          if (!n || src.isNull()) return;
+          const key = 'p' + this.threadId;
+          add(S.post, key, src, n, -1);
+        } catch (e) { S.bad++; }
+      }
+    });
+    S.hooked = true;
     });
     return true;
   },
@@ -111,18 +146,13 @@ rpc.exports = {
     hop = hop || 512;
     const frames = Math.floor(src.frames / hop);
     const out = new Float32Array(frames);
-    let fi = 0, acc = 0, cnt = 0, frame = 0;
+    let acc = 0, cnt = 0, frame = 0;
     for (let i = 0; i < src.chunks.length; i++) {
       const c = src.chunks[i];
       for (let j = 0; j < c.length; j += 2) {
-        acc += c[j] * c[j];
-        cnt++;
-        if (cnt >= hop) {
-          if (frame < frames) out[frame++] = Math.sqrt(acc / cnt);
-          acc = 0; cnt = 0;
-        }
+        acc += c[j] * c[j]; cnt++;
+        if (cnt >= hop) { if (frame < frames) out[frame++] = Math.sqrt(acc / cnt); acc = 0; cnt = 0; }
       }
-      fi++;
     }
     return Array.from(out.slice(0, frame));
   }
@@ -135,6 +165,31 @@ def _num(v, default=0.0):
         return float(v)
     except (TypeError, ValueError):
         return default
+
+
+
+def _attach(pid: int, timeout: float = 12.0):
+    """frida.attach с жёстким таймаутом: не даём процессу уйти в бесконечное ожидание."""
+    import threading
+
+    import frida
+
+    box: dict = {}
+
+    def work():
+        try:
+            box["s"] = frida.attach(pid)
+        except Exception as exc:  # noqa: BLE001
+            box["e"] = exc
+
+    th = threading.Thread(target=work, daemon=True)
+    th.start()
+    th.join(timeout)
+    if "s" in box:
+        return box["s"]
+    if "e" in box:
+        raise box["e"]
+    raise TimeoutError("frida.attach не ответил за %.0f с" % timeout)
 
 
 def wake(track: int = 1, seconds: float = 0.4, bridge=None, undo: bool = True) -> dict:
@@ -214,7 +269,7 @@ class RT:
                 raise RuntimeError("FL не запущена")
             pid = found[0]
         self.pid = pid
-        self.session = frida.attach(pid)
+        self.session = _attach(pid)
         self.script = self.session.create_script(JS)
         self.errors: list = []
         self.script.on("message", self._on_msg)
