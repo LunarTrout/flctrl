@@ -469,15 +469,36 @@ def fl_sii(vocal: str, masker: str) -> dict:
 
 
 @tool
+def fl_decide(mix_path: str, stems: dict, a: float | None = None,
+              b: float | None = None, target: float = 0.6,
+              cap_db: float = 3.0, section_s: float = 5.0) -> dict:
+    """Точные правки: где, в какой полосе и на сколько дБ (по секциям).
+
+    Считает слышимость по ISO 532-2 в каждой секции и каждой области, затем
+    переводит недостаток в децибелы. Полосы, где инструмент вообще не звучит,
+    не трогаются; одна правка ограничена капом.
+    """
+    import decide
+    import partial
+
+    attr = partial.attribute_mg(mix_path, stems, a, b, section_s=section_s)
+    res = decide.plan(attr, target=target, cap_db=cap_db)
+    res["audibility"] = {k: {"audib": v["audib"], "share_pct": v["share_pct"]}
+                         for k, v in attr["stems"].items()}
+    return res
+
+
+@tool
 def fl_attribute(mix_path: str, stems: dict, a: float | None = None,
-                 b: float | None = None) -> dict:
+                 b: float | None = None, section_s: float | None = None) -> dict:
     """Сколько каждого инструмента реально СЛЫШНО в миксе (ISO 532-2).
 
     Частичная громкость `N_partial = N(микс) − N(микс без источника)`,
     слышимость `A = N_partial / N_solo`, измеренная чувствительность `dN/dB`
     и по-полосная слышимость. В отличие от доли полос учитывает маскировку.
+    `section_s` добавляет разбивку по секциям — видно, ГДЕ инструмент пропадает.
     """
-    return fl.hear.attribute(mix_path, stems, a, b)
+    return fl.hear.attribute(mix_path, stems, a, b, section_s)
 
 
 @tool

@@ -129,8 +129,67 @@ def _n_series(lv: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return N, spec
 
 
+def _sections_by_region(spec_mix, spec_rest, spec_solo, masks, t, section_s,
+                        regions_global, offset: float = 0.0) -> list:
+    """Слышимость по секциям: где именно инструмент пропадает.
+
+    Глобальное «A = 0.2» скрывает, что в куплете всё в порядке, а в припеве
+    гитары забивают клавиши. Здесь то же отношение «слышно / соло», но
+    посчитанное по каждой секции и каждой области отдельно.
+    """
+    frames = spec_mix.shape[0]
+    hop = float(t[1] - t[0]) if len(t) > 1 else 0.1
+    per_sec = max(1, int(round(section_s / max(hop, 1e-6))))
+    out = []
+    for start in range(0, frames, per_sec):
+        sl = slice(start, min(frames, start + per_sec))
+        if sl.stop - sl.start < 2:
+            continue
+        reg = {}
+        sh = {}
+        snr = {}
+        total_solo = float(np.mean(spec_solo[sl].sum(axis=1)))
+        for name, mask in masks.items():
+            if not mask.any():
+                continue
+            part = np.maximum(spec_mix[sl][:, mask].sum(axis=1)
+                              - spec_rest[sl][:, mask].sum(axis=1), 0.0)
+            solo = spec_solo[sl][:, mask].sum(axis=1)
+            rest = spec_rest[sl][:, mask].sum(axis=1)
+            denom = float(np.mean(solo))
+            reg[name] = (round(float(np.clip(np.mean(part) / denom, 0, 1)), 3)
+                         if denom > 1e-9 else 0.0)
+            sh[name] = (round(denom / total_solo, 3) if total_solo > 1e-9 else 0.0)
+            # отношение «инструмент / остальное» в полосе: не насыщается нулём,
+            # поэтому по нему можно планировать правку в плотном миксе
+            r_mean = float(np.mean(rest))
+            snr[name] = (round(float(np.clip(10 * np.log10(max(denom, 1e-30)
+                                                          / max(r_mean, 1e-30)),
+                                            -40, 40)), 1)
+                         if r_mean > 1e-9 else 40.0)
+        out.append({"t": round(float(t[start]) + offset, 1), "regions": reg,
+                    "share": sh, "snr": snr, "active": total_solo > 1e-6})
+    return out
+
+
 def attribute_mg(mix_path: str, stems: dict[str, str], a: float | None = None,
-                 b: float | None = None, level_spl: float = 90.0) -> dict:
+                 b: float | None = None, level_spl: float = 90.0,
+                 section_s: float | None = None) -> dict:
+    """Слышимость по ISO 532-2 с кэшем: модель дорогая, файлы меняются редко."""
+    import cache
+    import os as _os
+
+    parts = [_os.path.abspath(mix_path)]
+    parts += [k for k in sorted(stems)]
+    parts += [_os.path.abspath(p) for k, p in sorted(stems.items())]
+    parts += [a, b, level_spl, section_s]
+    return cache.memo("mg", parts,
+                      lambda: _attribute_mg(mix_path, stems, a, b, level_spl, section_s))
+
+
+def _attribute_mg(mix_path: str, stems: dict[str, str], a: float | None = None,
+                  b: float | None = None, level_spl: float = 90.0,
+                  section_s: float | None = None) -> dict:
     """То же, что attribute(), но на модели ISO 532-2 (Мур-Гласберг).
 
     Разница принципиальная: Zwicker считает громкость по 240 полосам Bark,
@@ -185,7 +244,7 @@ def attribute_mg(mix_path: str, stems: dict[str, str], a: float | None = None,
 
         mean_partial = float(np.mean(N_partial))
         mean_solo = float(np.mean(N_solo))
-        out["stems"][name] = {
+        row = {
             "N_solo": mean_solo,
             "N_partial": mean_partial,
             "audib": float(np.clip(mean_partial / mean_solo, 0.0, 1.0)) if mean_solo > 1e-9 else 0.0,
@@ -194,6 +253,11 @@ def attribute_mg(mix_path: str, stems: dict[str, str], a: float | None = None,
             "dN_per_db": dN,
             "regions": regions,
         }
+        if section_s:
+            row["sections"] = _sections_by_region(spec_mix, spec_rest, spec_solo,
+                                                  masks, t, section_s, regions,
+                                                  offset=float(a or 0.0))
+        out["stems"][name] = row
 
     total = sum(v["N_partial"] for v in out["stems"].values()) or 1e-9
     for v in out["stems"].values():

@@ -20,6 +20,10 @@ import shutil
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DIR = os.path.join(os.path.dirname(HERE), "_cache", "hear")
 
+# Версия схемы: при смене формата результата старые записи не должны
+# подсовываться как валидные. Меняй вместе с форматом — кэш сам устареет.
+VERSION = "4"
+
 
 def _dir() -> str:
     d = os.environ.get("FLCTRL_CACHE", DEFAULT_DIR)
@@ -33,7 +37,7 @@ def enabled() -> bool:
 
 def key(scope: str, parts: list) -> str:
     h = hashlib.sha256()
-    h.update(scope.encode("utf-8"))
+    h.update(("%s|v%s" % (scope, VERSION)).encode("utf-8"))
     for p in parts:
         if isinstance(p, str) and os.path.exists(p):
             st = os.stat(p)

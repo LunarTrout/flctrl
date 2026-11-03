@@ -104,7 +104,11 @@ def main(argv=None) -> int:
         stems = json.loads(open(args[1], encoding="utf-8").read()) if len(args) > 1 else {}
         a = float(args[args.index("--a") + 1]) if "--a" in args else None
         b = float(args[args.index("--b") + 1]) if "--b" in args else None
-        _out(partial.attribute(args[0], stems, a, b))
+        sec = float(args[args.index("--section") + 1]) if "--section" in args else None
+        if sec:
+            _out(partial.attribute_mg(args[0], stems, a, b, section_s=sec))
+        else:
+            _out(partial.attribute(args[0], stems, a, b))
         return 0
     if cmd == "balance":
         import balance

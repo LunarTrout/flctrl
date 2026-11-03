@@ -524,7 +524,7 @@ class _Hear:
                 pass
 
     def attribute(self, mix_path: str, stems: dict, a: float | None = None,
-                  b: float | None = None):
+                  b: float | None = None, section_s: float | None = None):
         """Сколько каждого источника реально СЛЫШНО в миксе.
 
         Частичная громкость `N_partial = N(микс) − N(микс без источника)` и
@@ -542,6 +542,8 @@ class _Hear:
         args = [mix_path, stems_path]
         if a is not None and b is not None:
             args += ["--a", str(a), "--b", str(b)]
+        if section_s:
+            args += ["--section", str(section_s)]
         try:
             return _hear_cli("attribute", *args)
         finally:
