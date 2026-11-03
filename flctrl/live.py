@@ -16,6 +16,7 @@ FL при Disk Recording отдаёт PCM каждой дорожки в WriteFi
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import socket
@@ -23,11 +24,15 @@ import struct
 import subprocess
 import sys
 import time
+import zlib
 
 BRIDGE = ("127.0.0.1", 9787)
 DAEMON = ("127.0.0.1", 9788)
 RECORDED = os.path.join(os.environ.get("USERPROFILE", "C:/"),
                         "Documents", "Image-Line", "FL Studio", "Audio", "Recorded")
+AUTOSAVE_DIR = os.path.join(os.environ.get("USERPROFILE", "C:/"), "Documents",
+                            "Image-Line", "FL Studio", "Projects", "Backup")
+BACKUP_DIR = os.path.join(os.environ.get("USERPROFILE", "C:/"), "Backups", "flctrl")
 DAEMON_SCRIPT = os.environ.get(
     "FLCTRL_HOOK_DAEMON",
     r"C:/Users/epicc/mcp/flstudio-mcp/tools-local/hook_daemon.py")
@@ -203,10 +208,71 @@ def stop_daemon() -> dict:
         return {"ok": False, "error": str(exc)[:120]}
 
 
+def _sha1(path: str) -> str:
+    import hashlib
+    h = hashlib.sha1()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def snapshots(limit: int = 50) -> list:
+    """Точки сохранения, которые мы наделали перед снимками (новые сверху)."""
+    if not os.path.isdir(BACKUP_DIR):
+        return []
+    rows = []
+    for f in os.listdir(BACKUP_DIR):
+        if not f.lower().endswith(".flp"):
+            continue
+        p = os.path.join(BACKUP_DIR, f)
+        rows.append({"file": p, "size": os.path.getsize(p),
+                     "mtime": round(os.path.getmtime(p))})
+    rows.sort(key=lambda r: r["mtime"], reverse=True)
+    return rows[:limit]
+
+
+def backup(max_age_s: float = 3600.0, keep: int = 20) -> dict:
+    """Точка сохранения перед снимком: копия последнего автосейва FL.
+
+    Одинаковые автосейвы не дублируются (сверка по sha1), старые точки
+    подрезаются до `keep`.
+    """
+    import shutil
+    if not os.path.isdir(AUTOSAVE_DIR):
+        return {"ok": False, "error": "нет папки автосейвов FL"}
+    files = [os.path.join(AUTOSAVE_DIR, f) for f in os.listdir(AUTOSAVE_DIR)
+             if f.lower().endswith(".flp")]
+    if not files:
+        return {"ok": False, "error": "автосейвов нет"}
+    newest = max(files, key=os.path.getmtime)
+    age = time.time() - os.path.getmtime(newest)
+    if age > max_age_s:
+        return {"ok": False, "error": "автосейв старше %.0f мин" % (age / 60),
+                "file": newest, "age_s": round(age)}
+    digest = _sha1(newest)
+    existing = snapshots(limit=200)
+    for row in existing:
+        if row["size"] == os.path.getsize(newest) and _sha1(row["file"]) == digest:
+            return {"ok": True, "file": row["file"], "skipped": "тот же автосейв",
+                    "age_s": round(age), "points": len(existing)}
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dst = os.path.join(BACKUP_DIR, "%s_%s" % (stamp, os.path.basename(newest)))
+    shutil.copy2(newest, dst)
+    for row in snapshots(limit=1000)[keep:]:
+        try:
+            os.remove(row["file"])
+        except OSError:
+            pass
+    return {"ok": True, "file": dst, "source": newest, "age_s": round(age),
+            "points": len(snapshots(limit=1000))}
+
+
 # ---------------------------------------------------------------------- снимок
 
-def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
-            fade: bool = True, want_audio: bool = False) -> dict:
+def capture_memory(tracks=None, seconds: float = 2.0, start: float | None = None,
+                   fade: bool = True, want_audio: bool = False) -> dict:
     """Снять звук дорожек: метрики + лента (время x 28 полос) на каждую.
 
     want_audio=True — оставить сэмплы в ``_samples`` (нужно для dump(),
@@ -232,6 +298,7 @@ def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
     except ValueError:
         armed_before = set()
 
+    safety = backup()
     _daemon_send({"cmd": "start"}, timeout=10.0)
     error = None
     stats: dict = {}
@@ -266,16 +333,24 @@ def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
         except OSError:
             pass
         try:
-            payload = _daemon_send({"cmd": "stop", "settle": 0.3})
+            payload = _daemon_send({"cmd": "stop", "settle": 0.3}, timeout=300.0)
             stats = payload.get("stats") or {}
         except (OSError, ValueError) as exc:
             error = (error + "; " if error else "") + "демон: %s" % str(exc)[:120]
 
     by_handle: dict[int, bytearray] = {}
-    for r in payload.get("calls") or []:
-        if r.get("len", -1) < 4096:
-            continue
-        by_handle.setdefault(int(r["h"]), bytearray()).extend(bytes(r["data"]))
+    audio_map = payload.get("audio")
+    if isinstance(audio_map, dict):
+        for h, blob in audio_map.items():
+            try:
+                by_handle[int(h)] = bytearray(zlib.decompress(base64.b64decode(blob)))
+            except (ValueError, zlib.error):
+                continue
+    else:                                   # старый формат ответа
+        for r in payload.get("calls") or []:
+            if r.get("len", -1) < 4096:
+                continue
+            by_handle.setdefault(int(r["h"]), bytearray()).extend(bytes(r["data"]))
     files = payload.get("files") or {}
 
     names = {}
@@ -318,7 +393,126 @@ def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
     res = {"tracks": {str(k): v for k, v in out.items()}, "frames": frames,
            "chunks": stats.get("n"), "bytes": stats.get("bytes"),
            "seconds": seconds, "start": start, "armed_before": sorted(armed_before),
-           "cleaned": clean()}
+           "cleaned": clean(), "backup": safety}
+    if want_audio:
+        res["_samples"] = samples
+    if error:
+        res["error"] = error
+    return res
+
+
+def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
+            fade: bool = True, want_audio: bool = False, mode: str = "files") -> dict:
+    """Снимок звука дорожек. mode="files" — надёжно (FL пишет и сразу удаляем),
+    mode="memory" — через хук, на диск не пишется ничего вообще."""
+    fn = capture_memory if str(mode).startswith("mem") else capture_files
+    return fn(tracks=tracks, seconds=seconds, start=start, fade=fade,
+              want_audio=want_audio)
+
+
+def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
+                  fade: bool = True, want_audio: bool = False) -> dict:
+    """Надёжный путь: FL пишет дорожки на диск, читаем и сразу удаляем.
+
+    Никаких хуков — значит FL не падает. Диск «засоряется» только на время
+    снимка, после чего пустые и рабочие файлы удаляются.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    if not fl_pid():
+        return {"error": "FL не запущена", "tracks": {}, "frames": {}}
+    if not tracks:
+        n = int(_num(_bridge("mixer.getTrackCount()")))
+        tracks = list(range(1, n))
+    tracks = [int(t) for t in tracks]
+
+    was_mode = _bridge("transport.getLoopMode()")
+    armed_raw = _bridge("[i for i in range(mixer.getTrackCount()) if mixer.isTrackArmed(i)]")
+    try:
+        armed_before = set(json.loads(armed_raw)) if isinstance(armed_raw, str) else set()
+    except ValueError:
+        armed_before = set()
+    before = set(os.listdir(RECORDED)) if os.path.isdir(RECORDED) else set()
+    safety = backup()
+    error = None
+    try:
+        if str(was_mode).strip() not in ("1", "1.0"):
+            _bridge("transport.setLoopMode()")
+        for t in tracks:
+            if not int(_num(_bridge("mixer.isTrackArmed(%d)" % t))):
+                _bridge("mixer.armTrack(%d)" % t)
+        if not int(_num(_bridge("transport.isRecording()"))):
+            _bridge("transport.record()")
+        if start is not None:
+            _bridge("transport.setSongPos(%r)" % float(start))
+        _bridge("transport.start()")
+        time.sleep(seconds)
+        _bridge("transport.stop()")
+        if int(_num(_bridge("transport.isRecording()"))):
+            _bridge("transport.record()")
+    except OSError as exc:
+        error = "мост FL: %s" % str(exc)[:120]
+    finally:
+        for t in tracks:
+            try:
+                if t not in armed_before and int(_num(_bridge("mixer.isTrackArmed(%d)" % t))):
+                    _bridge("mixer.armTrack(%d)" % t)
+            except OSError:
+                pass
+        try:
+            if str(was_mode).strip() not in ("1", "1.0"):
+                _bridge("transport.setLoopMode()")
+        except OSError:
+            pass
+
+    time.sleep(0.6)
+    new = sorted(set(os.listdir(RECORDED)) - before) if os.path.isdir(RECORDED) else []
+    names = {}
+    for t in tracks:
+        try:
+            names[t] = str(_bridge("mixer.getTrackName(%d)" % t)).strip("'\"")
+        except OSError:
+            names[t] = "track_%d" % t
+
+    out: dict[int, dict] = {}
+    frames: dict[str, dict] = {}
+    samples: dict[int, object] = {}
+    for f in new:
+        path = os.path.join(RECORDED, f)
+        try:
+            x, fs = sf.read(path, always_2d=True)
+        except Exception:  # noqa: BLE001
+            continue
+        stereo = np.asarray(x, dtype="float64")
+        if stereo.shape[1] == 1:
+            stereo = np.repeat(stereo, 2, axis=1)
+        base = os.path.basename(f)
+        track = next((t for t, nm in names.items() if nm and base.endswith(nm + ".wav")), None)
+        mono = stereo.mean(axis=1)
+        peak = float(np.abs(mono).max()) if mono.size else 0.0
+        rms = float(np.sqrt((mono ** 2).mean())) if mono.size else 0.0
+        key = track if track is not None else -1
+        item = {"file": base, "name": names.get(track, ""),
+                "seconds": round(len(mono) / fs, 2),
+                "rms": round(rms, 5), "peak": round(peak, 4), "silent": peak < 1e-5}
+        try:
+            frames[str(key)] = make_frame(item, stereo, fs=fs)
+        except Exception as exc:  # noqa: BLE001
+            item["frame_error"] = str(exc)[:120]
+        if want_audio:
+            samples[key] = stereo
+        out[key] = item
+
+    for f in new:                       # диск после снимка чистый
+        try:
+            os.remove(os.path.join(RECORDED, f))
+        except OSError:
+            pass
+
+    res = {"tracks": {str(k): v for k, v in out.items()}, "frames": frames,
+           "seconds": seconds, "start": start, "armed_before": sorted(armed_before),
+           "cleaned": clean(), "backup": safety, "mode": "files"}
     if want_audio:
         res["_samples"] = samples
     if error:
@@ -365,13 +559,13 @@ def strip(stereo, fs: int = 44100, hop_s: float = 0.1, nfft: int = 4096) -> dict
             "bands": bands, "rms_db": rms_db, "peaks": peaks}
 
 
-def make_frame(item: dict, stereo) -> dict:
+def make_frame(item: dict, stereo, fs: int = 44100) -> dict:
     """Кадр ленты для дорожки: оси время x полоса, значения в дБ."""
     try:
         import frames
     except ImportError:
         from . import frames
-    st = strip(stereo)
+    st = strip(stereo, fs=fs)
     return frames.make_frame("bands", {"time": st["times"], "band": st["fc"]},
                              st["bands"], coverage={"measured": [item.get("name") or "?"]})
 
