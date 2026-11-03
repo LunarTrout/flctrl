@@ -486,6 +486,7 @@ def capture_memory(tracks=None, seconds: float = 2.0, start: float | None = None
                 "silent": peak < 1e-5}
         try:
             frames[str(key)] = make_frame(item, stereo)
+            item["tape"] = tape(stereo)
         except Exception as exc:  # noqa: BLE001
             item["frame_error"] = str(exc)[:120]
         if want_audio:
@@ -501,6 +502,30 @@ def capture_memory(tracks=None, seconds: float = 2.0, start: float | None = None
     if error:
         res["error"] = error
     return res
+
+
+def _events(stereo, fs) -> dict:
+    try:
+        import events as ev
+    except ImportError:
+        from . import events as ev
+    try:
+        return ev.detect(stereo, fs)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)[:120]}
+
+
+def _picture(cells, res, fc, times) -> str:
+    try:
+        import timbre
+    except ImportError:
+        from . import timbre
+    tp = {"cells": cells, "times": times, "fc": fc,
+          "onsets": res.get("onsets", 0), "onset_rate_hz": res.get("onset_rate_hz", 0.0)}
+    try:
+        return timbre.picture(tp)
+    except Exception as exc:  # noqa: BLE001
+        return "не нарисовалось: %s" % str(exc)[:80]
 
 
 def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
@@ -600,6 +625,197 @@ def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
                 "rms": round(rms, 5), "peak": round(peak, 4), "silent": peak < 1e-5}
         try:
             frames[str(key)] = make_frame(item, stereo, fs=fs)
+            item["tape"] = tape(stereo, fs=fs)
+        except Exception as exc:  # noqa: BLE001
+            item["frame_error"] = str(exc)[:120]
+        if want_audio:
+            samples[key] = stereo
+        out[key] = item
+
+    for f in new:                       # диск после снимка чистый
+        try:
+            os.remove(os.path.join(RECORDED, f))
+        except OSError:
+            pass
+
+    res = {"tracks": {str(k): v for k, v in out.items()}, "frames": frames,
+           "seconds": seconds, "start": start, "armed_before": sorted(armed_before),
+           "cleaned": clean(), "backup": safety, "mode": "files"}
+    if want_audio:
+        res["_samples"] = samples
+    if error:
+        res["error"] = error
+    return res
+
+
+def strip(stereo, fs: int = 44100, hop_s: float = 0.1, nfft: int = 4096) -> dict:
+    """Лента: по отрезкам времени — 28 третьоктав и RMS."""
+    import numpy as np
+    try:
+        import incr
+    except ImportError:                      # как пакет flctrl
+        from . import incr
+
+    x = np.asarray(stereo, dtype=float)
+    if x.ndim == 2:
+        x = x.mean(axis=1)
+    fc = np.asarray(incr.FC, dtype=float)
+    freqs = np.fft.rfftfreq(nfft, 1.0 / fs)
+    lo, hi = fc * 10 ** (-1 / 20), fc * 10 ** (1 / 20)
+    M = np.zeros((len(fc), len(freqs)))
+    for i in range(len(fc)):
+        m = (freqs >= lo[i]) & (freqs < hi[i])
+        if not m.any():
+            m[np.argmin(np.abs(freqs - fc[i]))] = True
+        M[i] = m
+    win = np.hanning(nfft)
+    hop = max(1, int(round(hop_s * fs)))
+    times, bands, rms_db, peaks = [], [], [], []
+    for start in range(0, max(0, len(x) - hop // 2), hop):
+        seg = x[start:start + nfft]
+        if len(seg) < nfft:
+            seg = np.pad(seg, (0, nfft - len(seg)))
+        spec = np.abs(np.fft.rfft(seg * win)) ** 2
+        spec *= 2.0 / (np.sum(win ** 2) * nfft)     # синус амплитуды 1 даёт 0 дБ
+        power = M @ spec
+        bands.append([round(float(10 * np.log10(p + 1e-20)), 1) for p in power])
+        r = float(np.sqrt(np.mean(seg ** 2)))
+        rms_db.append(round(20 * np.log10(r + 1e-12), 1))
+        peaks.append(round(float(np.abs(seg).max()), 4))
+        times.append(round(start / fs, 3))
+    return {"hop_s": hop_s, "times": times, "fc": [float(v) for v in fc],
+            "bands": bands, "rms_db": rms_db, "peaks": peaks}
+
+
+def tape(stereo, fs: int = 44100, hop_s: float = 0.1, nfft: int = 4096) -> dict:
+    """Широкая лента по дорожке: признаки, окрас, техника (см. timbre.py).
+
+    Возвращает и плоские ряды (bands/rms/peak/corr/...), и полные клетки
+    в ``cells`` — по ним видно не только «сколько», но и «что за звук».
+    """
+    try:
+        import timbre
+    except ImportError:
+        from . import timbre
+    res = timbre.analyze(stereo, fs=fs, hop_s=hop_s, nfft=nfft)
+    cells = res["cells"]
+    return {"hop_s": hop_s, "times": res["times"], "fc": res["fc"],
+            "bands": [c["bands"] for c in cells],
+            "rms_db": [c["rms_db"] for c in cells],
+            "peak": [c["peak"] for c in cells],
+            "crest_db": [c["crest_db"] for c in cells],
+            "flux_db": [c["flux_db"] for c in cells],
+            "low_db": [c["low_db"] for c in cells],
+            "mid_db": [c["mid_db"] for c in cells],
+            "high_db": [c["high_db"] for c in cells],
+            "stereo_corr": [c["corr"] for c in cells],
+            "stereo_width": [c["width"] for c in cells],
+            "f0_hz": [c["f0_hz"] for c in cells],
+            "notes": [c["note"] for c in cells],
+            "cells": cells, "technique": res["technique"],
+            "events": _events(stereo, fs),
+            "picture": _picture(cells, res, fc=res["fc"], times=res["times"]),
+            "onset_rate_hz": res["onset_rate_hz"], "onsets": res["onsets"]}
+
+
+def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
+            fade: bool = True, want_audio: bool = False, mode: str = "files") -> dict:
+    """Снимок звука дорожек. mode="files" — надёжно (FL пишет и сразу удаляем),
+    mode="memory" — через хук, на диск не пишется ничего вообще."""
+    fn = capture_memory if str(mode).startswith("mem") else capture_files
+    return fn(tracks=tracks, seconds=seconds, start=start, fade=fade,
+              want_audio=want_audio)
+
+
+def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
+                  fade: bool = True, want_audio: bool = False) -> dict:
+    """Надёжный путь: FL пишет дорожки на диск, читаем и сразу удаляем.
+
+    Никаких хуков — значит FL не падает. Диск «засоряется» только на время
+    снимка, после чего пустые и рабочие файлы удаляются.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    if not fl_pid():
+        return {"error": "FL не запущена", "tracks": {}, "frames": {}}
+    if not tracks:
+        n = int(_num(_bridge("mixer.getTrackCount()")))
+        tracks = list(range(1, n))
+    tracks = [int(t) for t in tracks]
+
+    was_mode = _bridge("transport.getLoopMode()")
+    armed_raw = _bridge("[i for i in range(mixer.getTrackCount()) if mixer.isTrackArmed(i)]")
+    try:
+        armed_before = set(json.loads(armed_raw)) if isinstance(armed_raw, str) else set()
+    except ValueError:
+        armed_before = set()
+    before = set(os.listdir(RECORDED)) if os.path.isdir(RECORDED) else set()
+    safety = backup()
+    error = None
+    try:
+        if str(was_mode).strip() not in ("1", "1.0"):
+            _bridge("transport.setLoopMode()")
+        for t in tracks:
+            if not int(_num(_bridge("mixer.isTrackArmed(%d)" % t))):
+                _bridge("mixer.armTrack(%d)" % t)
+        if not int(_num(_bridge("transport.isRecording()"))):
+            _bridge("transport.record()")
+        if start is not None:
+            _bridge("transport.setSongPos(%r)" % float(start))
+        _bridge("transport.start()")
+        time.sleep(seconds)
+        _bridge("transport.stop()")
+        if int(_num(_bridge("transport.isRecording()"))):
+            _bridge("transport.record()")
+    except OSError as exc:
+        error = "мост FL: %s" % str(exc)[:120]
+    finally:
+        for t in tracks:
+            try:
+                if t not in armed_before and int(_num(_bridge("mixer.isTrackArmed(%d)" % t))):
+                    _bridge("mixer.armTrack(%d)" % t)
+            except OSError:
+                pass
+        try:
+            if str(was_mode).strip() not in ("1", "1.0"):
+                _bridge("transport.setLoopMode()")
+        except OSError:
+            pass
+
+    time.sleep(0.6)
+    new = sorted(set(os.listdir(RECORDED)) - before) if os.path.isdir(RECORDED) else []
+    names = {}
+    for t in tracks:
+        try:
+            names[t] = str(_bridge("mixer.getTrackName(%d)" % t)).strip("'\"")
+        except OSError:
+            names[t] = "track_%d" % t
+
+    out: dict[int, dict] = {}
+    frames: dict[str, dict] = {}
+    samples: dict[int, object] = {}
+    for f in new:
+        path = os.path.join(RECORDED, f)
+        try:
+            x, fs = sf.read(path, always_2d=True)
+        except Exception:  # noqa: BLE001
+            continue
+        stereo = np.asarray(x, dtype="float64")
+        if stereo.shape[1] == 1:
+            stereo = np.repeat(stereo, 2, axis=1)
+        base = os.path.basename(f)
+        track = next((t for t, nm in names.items() if nm and base.endswith(nm + ".wav")), None)
+        mono = stereo.mean(axis=1)
+        peak = float(np.abs(mono).max()) if mono.size else 0.0
+        rms = float(np.sqrt((mono ** 2).mean())) if mono.size else 0.0
+        key = track if track is not None else -1
+        item = {"file": base, "name": names.get(track, ""),
+                "seconds": round(len(mono) / fs, 2),
+                "rms": round(rms, 5), "peak": round(peak, 4), "silent": peak < 1e-5}
+        try:
+            frames[str(key)] = make_frame(item, stereo, fs=fs)
+            item["tape"] = tape(stereo, fs=fs)
         except Exception as exc:  # noqa: BLE001
             item["frame_error"] = str(exc)[:120]
         if want_audio:
