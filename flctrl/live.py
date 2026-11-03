@@ -481,6 +481,7 @@ def capture_memory(tracks=None, seconds: float = 2.0, start: float | None = None
         rms = float(np.sqrt((mono ** 2).mean())) if mono.size else 0.0
         key = track if track is not None else -1
         item = {"file": base, "name": names.get(track, ""),
+                "role": _role(names.get(track, "")),
                 "seconds": round(len(mono) / 44100, 2),
                 "rms": round(rms, 5), "peak": round(peak, 4),
                 "silent": peak < 1e-5}
@@ -502,6 +503,17 @@ def capture_memory(tracks=None, seconds: float = 2.0, start: float | None = None
     if error:
         res["error"] = error
     return res
+
+
+def _role(name: str) -> str:
+    try:
+        import roles
+    except ImportError:
+        from . import roles
+    try:
+        return roles.role_of(name)
+    except Exception:  # noqa: BLE001
+        return "other"
 
 
 def _events(stereo, fs) -> dict:
@@ -621,6 +633,7 @@ def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
         rms = float(np.sqrt((mono ** 2).mean())) if mono.size else 0.0
         key = track if track is not None else -1
         item = {"file": base, "name": names.get(track, ""),
+                "role": _role(names.get(track, "")),
                 "seconds": round(len(mono) / fs, 2),
                 "rms": round(rms, 5), "peak": round(peak, 4), "silent": peak < 1e-5}
         try:
@@ -811,6 +824,7 @@ def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
         rms = float(np.sqrt((mono ** 2).mean())) if mono.size else 0.0
         key = track if track is not None else -1
         item = {"file": base, "name": names.get(track, ""),
+                "role": _role(names.get(track, "")),
                 "seconds": round(len(mono) / fs, 2),
                 "rms": round(rms, 5), "peak": round(peak, 4), "silent": peak < 1e-5}
         try:

@@ -331,6 +331,8 @@ def analyze_cell(seg_l: np.ndarray, seg_r: np.ndarray, fs: int = 44100,
         "low_db": round(low, 1), "mid_db": round(midb, 1), "high_db": round(high, 1),
         "hits": hits,
     }
+    cell["erb"] = _erb_bands(spec, freqs)
+    cell["wall"] = _wall(cell)
     return cell
 
 
@@ -405,11 +407,13 @@ def analyze(stereo: np.ndarray, fs: int = 44100, hop_s: float = 0.1,
     if len(f0s) >= 3:
         m = float(np.mean(f0s))
         jitter = float(np.std(f0s) / m * 100.0) if m > 0 else 0.0
-    return {"hop_s": hop_s, "times": times, "fc": [float(v) for v in FC],
-            "cells": cells, "onset_rate_hz": round(rate, 2),
-            "onsets": len(onsets), "technique": technique(stereo, fs, hop_s),
-            "mod_rate_hz": mod["rate_hz"], "mod_depth": mod["depth"],
-            "jitter_pct": round(jitter, 2)}
+    out = {"hop_s": hop_s, "times": times, "fc": [float(v) for v in FC],
+           "cells": cells, "onset_rate_hz": round(rate, 2),
+           "onsets": len(onsets), "technique": technique(stereo, fs, hop_s),
+           "mod_rate_hz": mod["rate_hz"], "mod_depth": mod["depth"],
+           "jitter_pct": round(jitter, 2)}
+    out.update(extras(x, fs, cells))
+    return out
 
 
 CHARS = " .:-=+*#%@"
@@ -478,3 +482,111 @@ def picture(tp: dict, band_rows: int = 14, width: int = 100) -> str:
                                         for c in cells))
     lines.append("онсеты: %d, %.1f Гц" % (tp.get("onsets", 0), tp.get("onset_rate_hz", 0.0)))
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- добавки к ленте
+
+ERB_FC = np.geomspace(25.0, 12000.0, 24)
+
+
+def _erb_bands(spec, freqs):
+    """24 ERB-подобные полосы (геометрическая сетка 25 Гц…12 кГц)."""
+    out = []
+    lo = ERB_FC / 10 ** (1 / 24)
+    hi = ERB_FC * 10 ** (1 / 24)
+    for a, b in zip(lo, hi):
+        m = (freqs >= a) & (freqs < b)
+        out.append(round(float(10 * np.log10(float(spec[m].sum()) + 1e-20)), 1) if m.any() else -200.0)
+    return out
+
+
+def _wall(cell) -> float:
+    """«Стена»: доля середины в общем и шероховатость. 0 — прозрачно, 1 — плотно."""
+    tot = 10 ** (cell["low_db"] / 10) + 10 ** (cell["mid_db"] / 10) + 10 ** (cell["high_db"] / 10)
+    if tot <= 0:
+        return 0.0
+    share = 10 ** (cell["mid_db"] / 10) / tot
+    rough = min(1.0, cell["flatness"] * 3)
+    return round(float(min(1.0, 0.6 * share + 0.4 * rough)), 3)
+
+
+def _loudness_blocks(stereo, fs):
+    """LUFS блоками 400 мс с шагом 100 мс (BS.1770 через incr.LoudnessMeter)."""
+    try:
+        import incr
+    except ImportError:
+        from . import incr
+    m = incr.LoudnessMeter(fs=fs, channels=2)
+    m.feed(np.asarray(stereo, dtype=float))
+    v = m.value()
+    blocks = np.array(m.blocks) if getattr(m, "blocks", None) else np.array([])
+    lra = 0.0
+    if blocks.size >= 4:
+        ok = blocks[blocks > -70]
+        if ok.size >= 4:
+            lra = float(np.percentile(ok, 95) - np.percentile(ok, 10))
+    return {"lufs": v.get("lufs"), "lra": round(lra, 1), "blocks": blocks}
+
+
+def _harmony(cells):
+    """Тональный центр: сумма хромы и близость к мажорному/минорному профилю."""
+    acc = np.zeros(12)
+    for c in cells:
+        ch = c.get("chroma") or []
+        if len(ch) == 12:
+            acc += np.array(ch)
+    if acc.sum() <= 0:
+        return {"pitch_classes": [0.0] * 12, "major": 0.0, "minor": 0.0, "top": []}
+    acc = acc / acc.sum()
+    major = np.array([6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88])
+    minor = np.array([6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17])
+    def best(tpl):
+        vals = [float(np.corrcoef(np.roll(tpl, k), acc)[0, 1]) for k in range(12)]
+        k = int(np.argmax(vals))
+        return round(float(vals[k]), 3), k
+    maj, maj_k = best(major)
+    mnr, mnr_k = best(minor)
+    top = [int(i) for i in np.argsort(acc)[::-1][:3]]
+    return {"pitch_classes": [round(float(v), 3) for v in acc],
+            "major": maj, "major_root": maj_k,
+            "minor": mnr, "minor_root": mnr_k, "top": top}
+
+
+def _sii(cells) -> float:
+    """Грубая разборчивость: доля речи-полос (500–4000) над общим уровнем."""
+    num = 0.0
+    den = 0.0
+    for c in cells:
+        if c["rms_db"] < -60:
+            continue
+        b = c["bands"]
+        f = FC
+        speech = [v for v, hz in zip(b, f) if 500 <= hz <= 4000]
+        allb = [v for v in b]
+        if not speech:
+            continue
+        num += float(np.mean([10 ** (v / 10) for v in speech]))
+        den += float(np.mean([10 ** (v / 10) for v in allb]))
+    if den <= 0:
+        return 0.0
+    return round(float(min(1.0, num / den)), 3)
+
+
+def extras(stereo, fs: int, cells: list) -> dict:
+    """Всё, что влезает в ленту сверх клеток: LUFS/LRA, SII, гармония, проверки."""
+    x = np.asarray(stereo, dtype=float)
+    if x.ndim == 1:
+        x = np.stack([x, x], axis=1)
+    loud = _loudness_blocks(x, fs)
+    blocks = loud["blocks"]
+    for i, c in enumerate(cells):
+        if i < len(blocks):
+            c["lufs_st"] = round(float(blocks[i]), 1)
+    mono = x.mean(axis=1)
+    dc = float(np.mean(mono))
+    clip = int(np.sum(np.abs(mono) >= 0.999))
+    corr = float(np.corrcoef(x[:, 0], x[:, 1])[0, 1]) if x.shape[1] >= 2 else 1.0
+    return {"lufs": loud["lufs"], "lra": loud["lra"],
+            "sii": _sii(cells), "harmony": _harmony(cells),
+            "checks": {"dc": round(dc, 6), "clip_samples": clip,
+                       "mono_corr": round(corr, 3)}}
