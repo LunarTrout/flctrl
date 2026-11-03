@@ -25,7 +25,7 @@ TESTS = os.path.join(ROOT, "tests")
 
 # Живые тесты: им нужен FL Studio и они пишут в открытый проект
 LIVE = {"test_clean_project.py", "test_live_plugin.py", "test_live_tracks.py",
-        "test_apply_eq.py", "test_realtime_pan.py", "test_play_plan.py", "test_apply_plan.py"}
+        "test_apply_eq.py", "test_realtime_pan.py", "test_play_plan.py", "test_apply_plan.py", "test_meters.py"}
 TEST_FLP = os.environ.get("FLCTRL_TEST_FLP", r"C:/Users/epicc/tools/fltest/small.flp")
 
 

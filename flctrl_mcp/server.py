@@ -317,14 +317,29 @@ def fl_simulate(mix_path: str, stems: dict, targets_path: str | None = None,
 
 
 @tool
-def fl_context(with_params: bool = False, with_routing: bool = True) -> dict:
+def fl_context(with_params: bool = False, with_routing: bool = True,
+               with_levels: bool = False, level_seconds: float = 2.0) -> dict:
     """Полный снимок проекта: дорожки, каналы, слоты, плагины, роутинг, темп.
 
     Отдаёт факты, а не решения. `coverage` показывает, что в снимок не попало.
     with_params=True добавляет параметры плагинов — видно полосы эквалайзеров
-    и ручки приборов (медленнее).
+    и ручки приборов (медленнее). with_levels=True включает транспорт на
+    level_seconds и добавляет уровень каждой дорожки (единственная звуковая
+    величина, которую FL отдаёт без рендера).
     """
-    return fl.state.context(with_params=with_params, with_routing=with_routing)
+    return fl.state.context(with_params=with_params, with_routing=with_routing,
+                            with_levels=with_levels, level_seconds=level_seconds)
+
+
+@tool
+def fl_meters(tracks: list | None = None, seconds: float = 3.0, play: bool = True) -> dict:
+    """Громкость каждой дорожки по её пику: медиана и максимум в дБ.
+
+    Пока транспорт идёт, FL отдаёт пик каждой дорожки. `play=True` включает
+    транспорт на время замера и потом останавливает, возвращая позицию.
+    Тихие дорожки помечены silent — это тоже факт, а не ошибка.
+    """
+    return fl.state.meters(tracks, seconds, play)
 
 
 @tool
@@ -544,6 +559,21 @@ def fl_cache(action: str = "stats", scope: str | None = None) -> dict:
     if action == "clear":
         return cache.clear(scope)
     return cache.stats()
+
+
+@tool
+def fl_harmony(mine: str, refs: list | None = None, a: float | None = None,
+               b: float | None = None) -> dict:
+    """Гармония числами: хрома, тональность, строй в центах, гармоничность.
+
+    Без `refs` — только замер. С `refs` — сравнение с профилями: близость хромы,
+    разница гармоничности, отклонение строя.
+    """
+    import harmony
+    m = harmony.analyse(mine, a, b)
+    if refs:
+        return harmony.compare(m, [harmony.analyse(r, a, b) for r in refs])
+    return m
 
 
 @tool

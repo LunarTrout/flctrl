@@ -252,7 +252,72 @@ class _State:
                             "solo": row[6] if len(row) > 6 else None})
         return out
 
-    def context(self, with_params: bool = False, with_routing: bool = True) -> dict:
+    def meters(self, tracks: list | None = None, seconds: float = 3.0,
+               play: bool = True, hop: float = 0.05) -> dict:
+        """Громкость каждой дорожки по её собственному пику — без рендера и стемов.
+
+        Пока транспорт идёт, FL отдаёт пик каждой дорожки; частые отсчёты дают
+        медиану (рабочий уровень) и максимум (пик). Это факт о проекте, а не
+        совет: что с ним делать, решает вызывающий.
+
+        play=True — если транспорт стоит, включить его на время замера и потом
+        вернуть позицию и остановить. play=False — мерить только идущий звук.
+        """
+        import time as _time
+
+        n = int(self._live("mixer.trackCount()"))
+        cand = [int(t) for t in (tracks if tracks is not None else range(n))]
+        was_playing = bool(int(self._live("transport.isPlaying()", attempts=2)))
+        pos = None
+        try:
+            pos = float(self._live("transport.getSongPos()", attempts=2))
+        except Exception:
+            pass
+
+        started = False
+        if play and not was_playing:
+            self._live("transport.start()", attempts=2)
+            started = True
+            _time.sleep(0.25)          # дать транспорту пойти
+
+        samples: dict = {t: [] for t in cand}
+        t0 = _time.perf_counter()
+        while _time.perf_counter() - t0 < seconds:
+            for t in cand:
+                try:
+                    samples[t].append(float(self._live(
+                        "mixer.getLastPeakVol(%d)" % t, attempts=2)))
+                except Exception:
+                    samples[t].append(0.0)
+            _time.sleep(hop)
+
+        if started:
+            self._live("transport.stop()", attempts=2)
+            if pos is not None:
+                try:
+                    self._live("transport.setSongPos(%r)" % pos, attempts=2)
+                except Exception:
+                    pass
+
+        out = {}
+        for t, vals in samples.items():
+            vals = [v for v in vals if v > 0]
+            if not vals:
+                out[t] = {"peak_db": None, "median_db": None, "n": 0, "silent": True}
+                continue
+            peak = max(vals)
+            srt = sorted(vals)
+            med = srt[len(srt) // 2]
+            out[t] = {"peak_db": round(20 * __import__("math").log10(peak + 1e-12), 2),
+                      "median_db": round(20 * __import__("math").log10(med + 1e-12), 2),
+                      "n": len(vals), "silent": False}
+        return {"tracks": out, "seconds": seconds, "played_by_us": started,
+                "was_playing": was_playing,
+                "coverage": {"tracks": len(cand), "seconds": seconds,
+                             "silent": [t for t, v in out.items() if v["silent"]]}}
+
+    def context(self, with_params: bool = False, with_routing: bool = True,
+                with_levels: bool = False, level_seconds: float = 2.0) -> dict:
         """Полный снимок проекта: всё, что нужно, чтобы принимать решения самому.
 
         Возвращает факты, а не советы: дорожки (громкость, панорама, mute/solo,
@@ -264,7 +329,9 @@ class _State:
         догадываться.
 
         with_params=True читает параметры каждого плагина (медленно, зато видно
-        все полосы эквалайзеров и ручки приборов).
+        все полосы эквалайзеров и ручки приборов). with_levels=True включает
+        транспорт на level_seconds и добавляет уровень каждой дорожки — это
+        единственная звуковая величина, которую FL отдаёт без рендера.
         """
         out = {"project": None, "tempo": None, "tracks": [], "channels": [],
                "routing": {}, "coverage": {}}
@@ -289,7 +356,11 @@ class _State:
 
         for t in tracks:
             slots = sorted(by_track.get(int(t["i"]), []), key=lambda x: x["slot"])
+            # показываем то, что реально стоит: пустые слоты не перечисляем
             t["slots"] = [{"slot": s["slot"], "plugin": s["name"]} for s in slots]
+            t["plugin_count"] = len(t["slots"])
+            if not t["slots"]:
+                t["note"] = "плагинов нет"
             if with_params:
                 import apply as apply_mod
                 for s in t["slots"]:
@@ -297,6 +368,17 @@ class _State:
                     s["is_eq"] = info["is_eq"]
                     s["bands"] = info["bands"]
                     s["param_count"] = info["param_count"]
+
+        if with_levels:
+            try:
+                m = self.meters(seconds=level_seconds, play=True)
+                for t in tracks:
+                    lv = (m.get("tracks") or {}).get(int(t["i"])) or {}
+                    t["level"] = {"median_db": lv.get("median_db"),
+                                  "peak_db": lv.get("peak_db"),
+                                  "silent": lv.get("silent")}
+            except Exception as exc:
+                out["coverage"]["levels_error"] = str(exc)[:120]
 
         if with_routing:
             for t in tracks:
@@ -306,10 +388,13 @@ class _State:
                     out["routing"][int(t["i"])] = None
 
         empty_routing = [i for i, v in out["routing"].items() if v is None]
+        without = [{"track": t["i"], "name": t["name"]} for t in tracks if not t["slots"]]
         out["coverage"] = {
             "tracks": len(tracks),
             "channels": len(out["channels"]),
-            "slots": sum(len(t["slots"]) for t in tracks),
+            "plugins": sum(len(t["slots"]) for t in tracks),
+            "tracks_without_plugins": without,
+            "slot_capacity": 10,
             "routing_read": with_routing and not empty_routing,
             "params_read": bool(with_params),
             "missing": ([("маршрутизация дорожек %s" % empty_routing)] if empty_routing else [])
@@ -728,6 +813,23 @@ class _Hear:
     def sii(self, vocal: str, masker: str) -> dict:
         """Разборчивость вокала против остального микса (SII, ANSI S3.5)."""
         return _hear_cli("sii", "--vocal", vocal, "--masker", masker, timeout=1800)
+
+    def harmony(self, mix: str, refs: list[str] | None = None,
+                a: float | None = None, b: float | None = None) -> dict:
+        """Тональность, строй, гармоничность и сравнение с профилями референсов."""
+        import json as _json
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            _json.dump(refs or [], f, ensure_ascii=False)
+            path = f.name
+        try:
+            args = ["harmony", mix, path]
+            if a is not None and b is not None:
+                args += ["--a", str(a), "--b", str(b)]
+            return _hear_cli(*args, timeout=3600)
+        finally:
+            os.unlink(path)
 
     def transients(self, mix: str, refs: list[str] | None = None,
                    max_seconds: float = 45.0) -> dict:
@@ -1212,6 +1314,13 @@ class _Apply:
         """
         import apply as apply_mod
         return apply_mod.apply_eq(None, track, slot, gains)
+
+    @staticmethod
+    def param_text(track: int, slot: int, index: int) -> str:
+        """Подпись одного параметра одним запросом: быстрее, чем читать все."""
+        v = _State._live("plugins.getParamValueString(%d, %d, %d)"
+                         % (track, slot, index), attempts=2)
+        return str(v).strip("'")
 
     @staticmethod
     def info(track: int, slot: int) -> dict:

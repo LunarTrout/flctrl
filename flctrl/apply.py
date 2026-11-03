@@ -119,7 +119,7 @@ def free_slot(fl, track: int, skip: set | None = None) -> int | None:
 
 def set_param_until(get_params, set_param, index: int, target: float,
                     parse, tolerance: float, lo: float = 0.0, hi: float = 1.0,
-                    iters: int = 12) -> dict:
+                    iters: int = 12, read_text=None) -> dict:
     """Подобрать нормализованное значение так, чтобы подпись плагина дала цель.
 
     Монотонность предполагается: частота и усиление растут с параметром.
@@ -129,12 +129,16 @@ def set_param_until(get_params, set_param, index: int, target: float,
     for _ in range(iters):
         mid = (lo + hi) / 2
         set_param(index, mid)
-        params = get_params()
-        p = next((x for x in params if x["i"] == index), None)
-        value = parse(p["text"]) if p else None
+        if read_text is not None:
+            text = read_text(index)
+        else:
+            params = get_params()
+            p = next((x for x in params if x["i"] == index), None)
+            text = p["text"] if p else None
+        value = parse(text) if text else None
         if value is None:
             return {"index": index, "value": mid, "text": None, "ok": False}
-        best = {"index": index, "value": round(mid, 4), "text": p["text"],
+        best = {"index": index, "value": round(mid, 4), "text": text,
                 "actual": value}
         if abs(value - target) <= tolerance:
             best["ok"] = True
@@ -202,15 +206,22 @@ def set_band(fl, track: int, slot: int, band: int,
     def set_param(index: int, value: float):
         fl.act.param(track, slot, index, value)
 
+    def read_text(index: int):
+        try:
+            return fl.act.param_text(track, slot, index)
+        except Exception:
+            return None
+
     out = {"ok": True, "band": band, "freq": None, "gain": None, "q": None}
     if hz is not None:
         f = set_param_until(get_params, set_param, target["freq_i"], float(hz),
-                            parse_hz, tolerance=max(5.0, float(hz) * 0.1))
+                            parse_hz, tolerance=max(5.0, float(hz) * 0.1),
+                            read_text=read_text)
         out["freq"] = f.get("text")
         out["ok"] = out["ok"] and bool(f.get("ok"))
     if db is not None:
         g = set_param_until(get_params, set_param, target["level_i"], float(db),
-                            parse_db, tolerance=0.3)
+                            parse_db, tolerance=0.3, read_text=read_text)
         out["gain"] = g.get("text")
         out["ok"] = out["ok"] and bool(g.get("ok"))
     if q is not None:
@@ -257,6 +268,12 @@ def apply_eq(fl, track: int, slot: int, gains: dict, verify: bool = True) -> dic
     def set_param(index: int, value: float):
         fl.act.param(track, slot, index, value)
 
+    def read_text(index: int):
+        try:
+            return fl.act.param_text(track, slot, index)
+        except Exception:
+            return None
+
     bands = bands_from_params(get_params())
     if not bands:
         return {"ok": False, "track": track, "slot": slot,
@@ -279,9 +296,9 @@ def apply_eq(fl, track: int, slot: int, gains: dict, verify: bool = True) -> dic
         used.add(band["n"])
 
         f = set_param_until(get_params, set_param, band["freq_i"], hz,
-                            parse_hz, tolerance=hz * 0.15)
+                            parse_hz, tolerance=hz * 0.15, read_text=read_text)
         g = set_param_until(get_params, set_param, band["level_i"], db,
-                            parse_db, tolerance=0.4)
+                            parse_db, tolerance=0.4, read_text=read_text)
         applied.append({"region": region, "band": band["n"], "want_hz": hz, "want_db": db,
                         "freq_text": f.get("text"), "gain_text": g.get("text"),
                         "freq_i": band["freq_i"], "level_i": band["level_i"],

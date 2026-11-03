@@ -135,6 +135,22 @@ def main(argv=None) -> int:
         rs = [audit.measure(r, a, b) for r in refs]
         _out(audit.audit(m, rs))
         return 0
+    if cmd == "harmony":
+        import harmony
+
+        refs = []
+        if len(args) > 1:
+            raw = args[1]
+            refs = (json.loads(raw) if raw.lstrip().startswith("[")
+                    else json.loads(open(raw, encoding="utf-8").read()))
+        a = float(args[args.index("--a") + 1]) if "--a" in args else None
+        b = float(args[args.index("--b") + 1]) if "--b" in args else None
+        m = harmony.analyse(args[0], a, b)
+        if refs:
+            _out(harmony.compare(m, [harmony.analyse(r, a, b) for r in refs]))
+        else:
+            _out(m)
+        return 0
     if cmd == "transients":
         import transients
 
