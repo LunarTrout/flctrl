@@ -195,19 +195,45 @@ class _Link:
 class _State:
     """Чтение состояния: живое (мост) и из файла."""
 
+    WRITE_VERBS = ("set", "insert", "delete", "add", "mute(", "solo(", "select",
+                   "focus", "arm", "trigger", "processREC", "automate", "send",
+                   "start", "stop", "play", "record", "clear", "clone", "copy")
+
     @staticmethod
-    def _live(expr, heal: bool = True):
+    def _is_read(expr: str) -> bool:
+        e = expr.lower()
+        return not any(v in e for v in _State.WRITE_VERBS)
+
+    @staticmethod
+    def _live(expr, heal: bool = True, attempts: int = 3):
+        """Живой вызов через мост: чтения повторяются, записи — нет.
+
+        Повтор записи опасен: неизвестно, дошла ли она до движка, и повтор
+        может сделать действие дважды. Чтение повторять безопасно, а мост
+        иногда отвечает таймаутом просто потому, что FL занята рендером.
+        """
+        import time as _time
+
         import q
-        try:
-            return q.live(expr)
-        except Exception:
-            if not heal:
-                raise
-            # посредник мог умереть — библиотека поднимает его сама
-            res = link.ensure()
-            if not res.get("daemon"):
-                raise
-            return q.live(expr)
+
+        tries = attempts if _State._is_read(expr) else 1
+        last = None
+        for i in range(tries):
+            try:
+                return q.live(expr)
+            except Exception as exc:
+                last = exc
+                if i < tries - 1:
+                    _time.sleep(0.15 * (i + 1))
+                    continue
+                if not heal:
+                    raise
+                # посредник мог умереть — библиотека поднимает его сама
+                res = link.ensure()
+                if not res.get("daemon"):
+                    raise
+                return q.live(expr)
+        raise last
 
     def tracks(self, chunk: int = 6):
         """Живой микшер. Запрашивается кусками: длинные выражения транспорт режет."""
