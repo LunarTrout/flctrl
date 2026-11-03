@@ -581,6 +581,39 @@ def call(op: str, args: dict | None = None, fl=None) -> dict:
         raise ApiError("not_available", op,
                        error="запись дорожек появится с tap (см. SPEC §9)")
 
+    if op == "mix.report":
+        import report
+        mine = a.get("mine")
+        if not mine:
+            raise ApiError("bad_args", op, need=["mine"])
+        rep = report.build(mine, a.get("refs"), a.get("a"), a.get("b"),
+                           stems=a.get("stems"), targets_path=a.get("targets_path"))
+        if a.get("markdown"):
+            return {"markdown": report.to_markdown(rep), "actions": rep["actions"]}
+        # контекст с путями раздувает ответ: отдаём без него
+        rep.pop("ctx", None)
+        return rep
+
+    if op == "mix.decide":
+        import partial, decide
+        mix, stems = a.get("mix"), a.get("stems") or {}
+        if not mix or not stems:
+            raise ApiError("bad_args", op, need=["mix", "stems"])
+        attr = partial.attribute(mix, stems, a.get("a"), a.get("b"))
+        pl = decide.plan(attr, cap_db=float(a.get("cap_db", 3.0)),
+                         max_edits=int(a.get("max_edits", 12)),
+                         roles_map=a.get("roles_map"),
+                         targets=a.get("targets"))
+        return pl
+
+    if op == "mix.simulate":
+        import simulate
+        mix, stems, edits = a.get("mix"), a.get("stems") or {}, a.get("edits") or []
+        if not mix or not stems or not edits:
+            raise ApiError("bad_args", op, need=["mix", "stems", "edits"])
+        out = simulate.simulate(mix, stems, edits, a.get("outdir"))
+        return out
+
     if op == "pan.plan":
         import panplan
         stems = a.get("stems") or {}
