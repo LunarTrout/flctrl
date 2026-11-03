@@ -590,3 +590,50 @@ def extras(stereo, fs: int, cells: list) -> dict:
             "sii": _sii(cells), "harmony": _harmony(cells),
             "checks": {"dc": round(dc, 6), "clip_samples": clip,
                        "mono_corr": round(corr, 3)}}
+
+
+def transients_stats(stereo, fs: int = 44100) -> dict:
+    """Статистика транзиентов по дорожке (incr.TransientMeter)."""
+    try:
+        import incr
+    except ImportError:
+        from . import incr
+    m = incr.TransientMeter(fs=fs)
+    m.feed(np.asarray(stereo, dtype=float))
+    try:
+        return m.value()
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)[:120]}
+
+
+def masking(tracks: dict, min_db: float = 10.0, top: int = 8) -> dict:
+    """Кто кого перекрывает: медианные полосы дорожек → пары «маскер > цель».
+
+    tracks: {id: {"name": str, "bands": [[...], ...]}} — клетки уже посчитаны.
+    """
+    med = {}
+    for key, item in tracks.items():
+        cells = item.get("cells") or []
+        if not cells:
+            continue
+        b = np.array([c["bands"] for c in cells], dtype=float)
+        med[key] = (np.median(b, axis=0), item.get("name") or str(key))
+    if len(med) < 2:
+        return {"pairs": [], "note": "нужно ≥2 дорожек"}
+    pairs = []
+    keys = list(med)
+    for i, a in enumerate(keys):
+        for b in keys[i + 1:]:
+            la, na = med[a]
+            lb, nb = med[b]
+            diff = la - lb
+            k = int(np.argmax(diff))
+            if diff[k] >= min_db:
+                pairs.append({"masker": na, "target": nb,
+                              "band_hz": float(FC[k]), "db": round(float(diff[k]), 1)})
+            k2 = int(np.argmin(diff))
+            if -diff[k2] >= min_db:
+                pairs.append({"masker": nb, "target": na,
+                              "band_hz": float(FC[k2]), "db": round(float(-diff[k2]), 1)})
+    pairs.sort(key=lambda p: -p["db"])
+    return {"pairs": pairs[:top], "count": len(pairs), "min_db": min_db}

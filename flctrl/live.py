@@ -517,6 +517,7 @@ def capture_memory(tracks=None, seconds: float = 2.0, start: float | None = None
         try:
             frames[str(key)] = make_frame(item, stereo)
             item["tape"] = tape(stereo)
+            item["transients"] = _transients(stereo, fs)
         except Exception as exc:  # noqa: BLE001
             item["frame_error"] = str(exc)[:120]
         if want_audio:
@@ -527,6 +528,7 @@ def capture_memory(tracks=None, seconds: float = 2.0, start: float | None = None
            "chunks": stats.get("n"), "bytes": stats.get("bytes"),
            "seconds": seconds, "start": start, "armed_before": sorted(armed_before),
            "cleaned": clean(), "backup": safety}
+    res = _enrich(res, out, start, seconds)
     if want_audio:
         res["_samples"] = samples
     if error:
@@ -543,6 +545,56 @@ def _role(name: str) -> str:
         return roles.role_of(name)
     except Exception:  # noqa: BLE001
         return "other"
+
+
+def _enrich(res: dict, out: dict, start, seconds: float) -> dict:
+    """Добавить к снимку меж-дорожные слои: маскировка и провенанс."""
+    import timbre as _t
+
+    tiles = {}
+    for key, item in out.items():
+        cells = (item.get("tape") or {}).get("cells")
+        if cells:
+            tiles[str(key)] = {"name": item.get("name") or str(key), "cells": cells}
+    try:
+        res["masking"] = _t.masking(tiles)
+    except Exception as exc:  # noqa: BLE001
+        res["masking"] = {"error": str(exc)[:120]}
+
+    prov = []
+    try:
+        import api as _api
+        win = fl_window()
+        name = (win.get("title") or "").split(" - ")[0].strip()
+        path = _find_project(name) if name else None
+        if path:
+            _api.use_project(path)
+            start_s = float(start or 0.0)
+            t = 0.0
+            while t <= seconds + 1e-9:
+                r = _api.call("clip.at", {"seconds": start_s + t})
+                prov.append({"t": round(t, 2), "bar": r.get("bar"),
+                             "active": [a.get("channel_name") or a.get("pattern_name")
+                                        or ("clip%d" % a.get("clip_id"))
+                                        for a in (r.get("active") or [])]})
+                t += 0.5
+            res["position"] = {"start_seconds": start_s, "bpm": r.get("tempo")}
+    except Exception as exc:  # noqa: BLE001
+        res["provenance_error"] = str(exc)[:140]
+    if prov:
+        res["provenance"] = prov
+    return res
+
+
+def _transients(stereo, fs) -> dict:
+    try:
+        import timbre as _t
+    except ImportError:
+        from . import timbre as _t
+    try:
+        return _t.transients_stats(stereo, fs)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)[:120]}
 
 
 def _events(stereo, fs) -> dict:
@@ -670,6 +722,7 @@ def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
         try:
             frames[str(key)] = make_frame(item, stereo, fs=fs)
             item["tape"] = tape(stereo, fs=fs)
+            item["transients"] = _transients(stereo, fs)
         except Exception as exc:  # noqa: BLE001
             item["frame_error"] = str(exc)[:120]
         if want_audio:
@@ -685,6 +738,7 @@ def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
     res = {"tracks": {str(k): v for k, v in out.items()}, "frames": frames,
            "seconds": seconds, "start": start, "armed_before": sorted(armed_before),
            "cleaned": clean(), "backup": safety, "mode": "files"}
+    res = _enrich(res, out, start, seconds)
     if want_audio:
         res["_samples"] = samples
     if error:
@@ -863,6 +917,7 @@ def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
         try:
             frames[str(key)] = make_frame(item, stereo, fs=fs)
             item["tape"] = tape(stereo, fs=fs)
+            item["transients"] = _transients(stereo, fs)
         except Exception as exc:  # noqa: BLE001
             item["frame_error"] = str(exc)[:120]
         if want_audio:
@@ -878,6 +933,7 @@ def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
     res = {"tracks": {str(k): v for k, v in out.items()}, "frames": frames,
            "seconds": seconds, "start": start, "armed_before": sorted(armed_before),
            "cleaned": clean(), "backup": safety, "mode": "files"}
+    res = _enrich(res, out, start, seconds)
     if want_audio:
         res["_samples"] = samples
     if error:
