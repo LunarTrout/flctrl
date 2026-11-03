@@ -243,3 +243,97 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def capture_all(seconds: float, start: float, outdir: str,
+                tracks: list[int] | None = None, fs: int = 48000) -> dict:
+    """Снять звук всех дорожек по очереди и мастер для сверки.
+
+    Возвращает пути и статистику. Каждая дорожка пишется отдельным WAV,
+    мастер — как есть (без соло), чтобы можно было проверить сумму.
+    """
+    import soundfile as sf
+    import numpy as np
+
+    os.makedirs(outdir, exist_ok=True)
+    n = track_count()
+    targets = tracks if tracks is not None else list(range(1, n))
+    out: dict[int, dict] = {}
+
+    for t in targets:
+        unmute_all()
+        solo_only(t)
+        time.sleep(0.2)
+        call("transport.setSongPos(%r)" % _frac(start))
+        call("transport.start()")
+        time.sleep(0.3)
+        audio = capture(seconds, fs)
+        try:
+            call("transport.stop()")
+        except Exception:  # noqa: BLE001
+            pass
+        unmute_all()
+        path = os.path.join(outdir, "track_%02d.wav" % t)
+        sf.write(path, audio, fs)
+        mono = np.asarray(audio).mean(axis=1) if np.asarray(audio).ndim == 2 else np.asarray(audio)
+        out[t] = {"path": path, "peak": round(float(np.abs(mono).max()), 4),
+                  "rms": round(float(np.sqrt((mono ** 2).mean())), 5),
+                  "silent": bool(np.abs(mono).max() < 1e-4)}
+
+    unmute_all()
+    call("transport.setSongPos(%r)" % _frac(start))
+    call("transport.start()")
+    time.sleep(0.3)
+    master = capture(seconds, fs)
+    try:
+        call("transport.stop()")
+    except Exception:  # noqa: BLE001
+        pass
+    master_path = os.path.join(outdir, "master.wav")
+    sf.write(master_path, master, fs)
+    return {"tracks": out, "master": master_path, "dir": outdir,
+            "seconds": seconds, "start": start}
+
+
+def verify_sum(result: dict, fs: int = 48000) -> dict:
+    """Сверить сумму снятых дорожек с мастером: форма спектра и корреляция."""
+    import soundfile as sf
+    import numpy as np
+
+    tracks = result.get("tracks") or {}
+    used, acc = [], None
+    for t, info in tracks.items():
+        if info.get("silent"):
+            continue
+        x, _ = sf.read(info["path"], always_2d=True)
+        m = x.mean(axis=1)
+        n = min(len(m), int(fs * 4))
+        m = m[:n]
+        acc = m if acc is None else acc[:n] + m[:min(len(acc), n)]
+        used.append(t)
+    if acc is None:
+        return {"error": "нет непустых дорожек"}
+    master, _ = sf.read(result["master"], always_2d=True)
+    mm = master.mean(axis=1)[:len(acc)]
+
+    a = acc - acc.mean()
+    b = mm - mm.mean()
+    corr = float((a * b).sum() / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12))
+    # грубая сверка спектра: 8 полос
+    def bands(x):
+        n = 8192
+        spec = np.abs(np.fft.rfft(x[:n] * np.hanning(min(n, len(x))))) ** 2
+        f = np.fft.rfftfreq(n, 1 / fs)
+        edges = [20, 100, 300, 800, 2000, 5000, 10000, 16000, 24000]
+        out = []
+        for lo, hi in zip(edges[:-1], edges[1:]):
+            m = (f >= lo) & (f < hi)
+            out.append(float(10 * np.log10(spec[m].sum() + 1e-12)))
+        return out
+
+    bs, bm = bands(acc), bands(mm)
+    diff = [round(s - m, 1) for s, m in zip(bs, bm)]
+    return {"tracks_used": len(used), "track_ids": sorted(used),
+            "corr": round(corr, 3), "band_diff_db": diff,
+            "sum_rms": round(float(np.sqrt((acc ** 2).mean())), 4),
+            "master_rms": round(float(np.sqrt((mm ** 2).mean())), 4)}
