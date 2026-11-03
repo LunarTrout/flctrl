@@ -317,6 +317,28 @@ def fl_simulate(mix_path: str, stems: dict, targets_path: str | None = None,
 
 
 @tool
+def fl_move_pan(track: int, points: list, duration_s: float,
+                rate_hz: float = 20.0) -> dict:
+    """Провести панораму дорожки по точкам [(время_с, значение -1..1)] вживую.
+
+    Движение пишется потоком без сохранения проекта на каждом шаге (иначе шаг
+    занимает 1.5 с). Возвращает статистику: сколько записей, ошибок, худшее
+    опоздание. После остановки остаётся последнее значение.
+    """
+    return fl.move_pan(track, points, duration_s, rate_hz)
+
+
+@tool
+def fl_apply_eq(track: int, slot: int, gains: dict) -> dict:
+    """Применить правки плана к живому эквалайзеру: {"mid": 3.0, "pres": -2.0}.
+
+    Шкалы плагина не документированы, поэтому значения подбираются по его же
+    подписи: поставили — прочитали — поправили. Проект не перезагружается.
+    """
+    return fl.apply.eq(track, slot, gains)
+
+
+@tool
 def fl_doctor() -> dict:
     """Самодиагностика живого API: десять чтений с временем и результатом.
 

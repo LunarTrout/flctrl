@@ -870,15 +870,45 @@ class _Act:
             return {"ok": False, "error": str(e)[:80]}
 
     def _do(self, expr: str):
-        result = _State._live(expr)
+        """Выполнить правку. FL иногда отвечает «Operation unsafe at current
+        time» — это значит, что запись пришла во время воспроизведения или
+        пока открыт модальный диалог. Тогда один раз останавливаем транспорт и
+        повторяем: молча падать на этом нельзя, правка теряется."""
+        import time as _time
+        try:
+            result = _State._live(expr)
+        except Exception as exc:
+            if "unsafe" not in str(exc).lower():
+                raise
+            try:
+                _State._live("transport.stop()", attempts=1)
+            except Exception:
+                pass
+            _time.sleep(0.3)
+            if int(_State._live("transport.isPlaying()")):
+                raise
+            result = _State._live(expr, attempts=2)
         self._persist()
         return result
 
     def volume(self, track: int, value: float):
         return self._do("mixer.setTrackVolume(%d, %r)" % (track, value))
 
+    def volume_live(self, track: int, value: float):
+        """Громкость без сохранения проекта: для потоков и реалтайма."""
+        return _State._live("mixer.setTrackVolume(%d, %r)" % (track, value))
+
     def pan(self, track: int, value: float):
         return self._do("mixer.setTrackPan(%d, %r)" % (track, value))
+
+    def pan_live(self, track: int, value: float):
+        """Панорама без сохранения проекта.
+
+        Обычная запись сохраняет проект после каждого изменения — для движения
+        в реальном времени это 1.5 с на шаг. Здесь пишем только значение;
+        сохранять нужно один раз после остановки.
+        """
+        return _State._live("mixer.setTrackPan(%d, %r)" % (track, value))
 
     def mute(self, track: int, state: bool):
         return self._do("mixer.muteTrack(%d, %r)" % (track, state))
@@ -992,13 +1022,86 @@ class _Act:
                 "before": before, "after": after, "value": value,
                 "latency_ms": latency}
 
-    def params(self, track: int, slot: int):
-        return _State._live(
-            "__import__('json').dumps([{'i': i, 'name': str(plugins.getParamName(i, %d, %d)),"
-            " 'val': plugins.getParamValue(i, %d, %d),"
-            " 'text': str(plugins.getParamValueString(i, %d, %d))}"
-            " for i in range(plugins.getParamCount(%d, %d))])"
-            % (track, slot, track, slot, track, slot, track, slot))
+    def params(self, track: int, slot: int, chunk: int = 6):
+        """Параметры плагина кусками: длинный ответ мост режет и он приходит пустым."""
+        import json as _json
+
+        n = int(_State._live("plugins.getParamCount(%d, %d)" % (track, slot)))
+        out = []
+        for a in range(0, n, chunk):
+            b = min(a + chunk, n)
+            expr = ("__import__('json').dumps([{'i': i,"
+                    " 'name': str(plugins.getParamName(i, %d, %d)),"
+                    " 'val': round(float(plugins.getParamValue(i, %d, %d)), 4),"
+                    " 'text': str(plugins.getParamValueString(i, %d, %d))}"
+                    " for i in range(%d, %d)])"
+                    % (track, slot, track, slot, track, slot, a, b))
+            raw = _State._live(expr)
+            try:
+                for item in _json.loads(raw):
+                    # мост отдаёт строки в кавычках: "'Band 1 level'"
+                    item["name"] = str(item.get("name", "")).strip("'")
+                    item["text"] = str(item.get("text", "")).strip("'")
+                    out.append(item)
+            except Exception:
+                # кусок не разобрался — читаем по одному, чтобы не потерять всё
+                for i in range(a, b):
+                    try:
+                        name = _State._live("str(plugins.getParamName(%d, %d, %d))"
+                                            % (i, track, slot))
+                        val = float(_State._live("plugins.getParamValue(%d, %d, %d)"
+                                                 % (i, track, slot)))
+                        text = _State._live("str(plugins.getParamValueString(%d, %d, %d))"
+                                            % (i, track, slot))
+                        out.append({"i": i, "name": str(name).strip("'"),
+                                    "val": val, "text": str(text).strip("'")})
+                    except Exception:
+                        continue
+        return out
+
+
+# ---------------------------------------------------------------- реалтайм
+
+class _Realtime:
+    """Движение параметров в реальном времени (без API автоматизации)."""
+
+    @staticmethod
+    def pan(track: int, points: list, duration_s: float, rate_hz: float = 20.0) -> dict:
+        import realtime as rt
+        return rt.move_pan(_Realtime._client(), track, points, duration_s, rate_hz)
+
+    @staticmethod
+    def param(track: int, slot: int, index: int, points: list,
+              duration_s: float, rate_hz: float = 20.0) -> dict:
+        import realtime as rt
+        return rt.move_value(_Realtime._client(), track, slot, index, points,
+                             duration_s, rate_hz)
+
+    @staticmethod
+    def _client():
+        import sys
+        return sys.modules[__name__]
+
+
+def move_pan(track: int, points: list, duration_s: float, rate_hz: float = 20.0) -> dict:
+    """Удобная обёртка: провести панораму дорожки по точкам."""
+    return _Realtime.pan(track, points, duration_s, rate_hz)
+
+
+# ---------------------------------------------------------------- apply
+
+class _Apply:
+    """Применение плана к живому FL без перезагрузки проекта."""
+
+    @staticmethod
+    def eq(track: int, slot: int, gains: dict) -> dict:
+        """Выставить полосы эквалайзера по плану: {полоса: дБ}.
+
+        Шкалы плагина не документированы, поэтому значения подбираются по
+        подписи самого плагина: поставили — прочитали — поправили.
+        """
+        import apply as apply_mod
+        return apply_mod.apply_eq(None, track, slot, gains)
 
 
 # ---------------------------------------------------------------- create
@@ -1570,6 +1673,8 @@ sim = _Sim()
 predict = _Predict()
 judge = _Judge()
 create = _Create()
+apply = _Apply()
+rt = _Realtime()
 balance = _Balance()
 
 

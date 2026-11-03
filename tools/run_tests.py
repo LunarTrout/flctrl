@@ -24,7 +24,20 @@ ROOT = os.path.dirname(HERE)
 TESTS = os.path.join(ROOT, "tests")
 
 # Живые тесты: им нужен FL Studio и они пишут в открытый проект
-LIVE = {"test_clean_project.py", "test_live_plugin.py", "test_live_tracks.py"}
+LIVE = {"test_clean_project.py", "test_live_plugin.py", "test_live_tracks.py",
+        "test_apply_eq.py", "test_realtime_pan.py"}
+TEST_FLP = os.environ.get("FLCTRL_TEST_FLP", r"C:/Users/epicc/tools/fltest/small.flp")
+
+
+def _python_live() -> str:
+    """Живые тесты требуют 3.12: в 3.13 нет frida, а без неё нет стенда."""
+    here = os.path.dirname(sys.executable)
+    up = os.path.dirname(os.path.dirname(here))
+    for p in (os.path.join(up, ".venv312", "Scripts", "python.exe"),
+              os.path.join(os.path.dirname(up), ".venv312", "Scripts", "python.exe")):
+        if os.path.exists(p):
+            return p
+    return _python()
 
 
 def _python() -> str:
@@ -38,6 +51,53 @@ def _python() -> str:
         if os.path.exists(p):
             return p
     return cand if os.path.exists(cand) else sys.executable
+
+
+def _ensure_test_project() -> str:
+    """Открыть тестовый проект, если FL не запущена. Чужой проект не трогаем.
+
+    Возвращает причину пропуска или пустую строку.
+    """
+    import subprocess
+    import time
+
+    try:
+        import render_job
+    except Exception as exc:
+        return "нет доступа к FL-слою: %s" % str(exc)[:60]
+
+    if not os.path.exists(TEST_FLP):
+        return "нет файла тестового проекта: %s" % TEST_FLP
+    want = os.path.basename(TEST_FLP).lower()
+
+    def title() -> str:
+        try:
+            return (render_job.window_title() or "").lower()
+        except Exception:
+            return ""
+
+    if render_job.fl_running():
+        if want in title():
+            return ""
+        # окно может быть ещё пустым: FL грузится, это не «другой проект»
+        t_wait = time.time()
+        while time.time() - t_wait < 120:
+            t = title()
+            if want in t:
+                return ""
+            if t and ".flp" in t:
+                return "открыт другой проект — живой тест не запускаю"
+            time.sleep(1.0)
+        return "FL не показала проект за 120 с"
+
+    fl_exe = os.environ.get("FLCTRL_FL_EXE") or r"C:\Programs\Fl Studio 2025\FL64.exe"
+    subprocess.Popen([fl_exe, TEST_FLP], close_fds=True)
+    t0 = time.time()
+    while time.time() - t0 < 180:
+        if want in title():
+            return ""
+        time.sleep(1.0)
+    return "тестовый проект не открылся"
 
 
 def main(argv=None) -> int:
@@ -56,14 +116,22 @@ def main(argv=None) -> int:
         return 2
 
     py = _python()
+    py_live = _python_live()
+    sys.path.insert(0, os.path.join(ROOT, "flctrl"))
     rows = []
     for name in files:
         if name in LIVE and not a.fl:
             rows.append((name, "пропущен", 0.0, "нужен FL (--fl)"))
             continue
+        if name in LIVE:
+            why = _ensure_test_project()
+            if why:
+                rows.append((name, "пропущен", 0.0, why))
+                continue
         t0 = time.perf_counter()
+        runner = py_live if name in LIVE else py
         try:
-            r = subprocess.run([py, os.path.join(TESTS, name)], cwd=ROOT,
+            r = subprocess.run([runner, os.path.join(TESTS, name)], cwd=ROOT,
                                capture_output=True, timeout=a.timeout)
             out = (r.stdout or b"").decode("utf-8", "replace")
             tail = ""

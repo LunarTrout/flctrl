@@ -49,32 +49,61 @@ def window_title() -> str:
     return win32gui.GetWindowText(h) if h else ""
 
 
-def close_fl(timeout_s: float = 90.0) -> bool:
+def close_fl(timeout_s: float = 90.0, save_first: bool = True) -> bool:
     """Закрыть FL штатно (как File → Exit), без kill.
 
-    Force-kill ломает MIDI-скрипты FL, поэтому только WM_CLOSE.
+    Force-kill ломает MIDI-скрипты FL, поэтому только WM_CLOSE. pywin32 есть не
+    везде, поэтому окно ищется через ctypes по классу формы — это тот же
+    WM_CLOSE, но без зависимости от стороннего пакета.
     """
+    if not fl_running():
+        return True
+    if save_first:
+        try:
+            import flsave
+            flsave.save(make_backup=False)
+        except Exception:
+            pass
+    h = 0
     try:
         import win32con
         import win32gui
+        h = win32gui.FindWindow("TFruityLoopsMainForm", None)
+        if h:
+            win32gui.PostMessage(h, win32con.WM_CLOSE, 0, 0)
     except ImportError:
-        return not fl_running()
-    h = win32gui.FindWindow("TFruityLoopsMainForm", None)
-    if h:
-        win32gui.PostMessage(h, win32con.WM_CLOSE, 0, 0)
+        import ctypes
+        h = ctypes.windll.user32.FindWindowW(ctypes.c_wchar_p("TFruityLoopsMainForm"), None)
+        if h:
+            ctypes.windll.user32.PostMessageW(h, 0x0010, 0, 0)
     started = time.time()
+    last_poke = started
     while time.time() - started < timeout_s:
         if not fl_running():
             return True
+        # окно могло не принять первое сообщение (например, был открыт диалог)
+        if time.time() - last_poke > 10:
+            last_poke = time.time()
+            try:
+                import ctypes
+                hh = ctypes.windll.user32.FindWindowW(
+                    ctypes.c_wchar_p("TFruityLoopsMainForm"), None)
+                if hh:
+                    ctypes.windll.user32.PostMessageW(hh, 0x0010, 0, 0)
+            except Exception:
+                pass
         time.sleep(1.5)
     return not fl_running()
 
 
 def _wavs(project_dir: str, fmt: str) -> dict:
+    """Файлы формата с размером и временем: размер один не годится — повторный
+    рендер пишет то же имя с тем же размером, и «нового» файла не видно."""
     out = {}
     for path in glob.glob(os.path.join(project_dir, "**", "*." + fmt), recursive=True):
         try:
-            out[path] = os.path.getsize(path)
+            st = os.stat(path)
+            out[path] = (st.st_size, st.st_mtime)
         except OSError:
             continue
     return out
@@ -178,13 +207,15 @@ def render(flp: str, fmt: str = "wav", timeout_s: float = 3600,
             seen = now
             last_change = time.time()
         elif time.time() - last_change > 25 and any(
-                path not in before for path in now):
+                p not in before or now.get(p) != before.get(p) for p in now):
             break
         if not fl_running() and time.time() - started > 20 and not any(
-                path not in before for path in now):
+                p not in before or now.get(p) != before.get(p) for p in now):
             break
 
-    new = [path for path in collect() if path not in before]
+    after = collect()
+    new = [path for path, sig in after.items()
+           if path not in before or sig != before[path]]
     return {"ok": bool(new), "files": sorted(new),
             "split": len(new) > 1,
             "elapsed_s": round(time.time() - started, 1)}
