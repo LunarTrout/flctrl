@@ -115,6 +115,54 @@ def _index(axis_values: list) -> dict:
     return {v: i for i, v in enumerate(axis_values)}
 
 
+def compare_corridor(a: dict, cor: dict, top: int | None = None) -> dict:
+    """Сравнить картину с коридором: попадание, отклонение, кто виноват.
+
+    Возвращает строки только по клеткам, где есть коридор, с флагом `out` и
+    отклонением от медианы. Сверху — самые большие вылеты.
+    """
+    med, lo, hi = cor["median"], cor["lo"], cor["hi"]
+    names = list(a["axes"])
+    rows = []
+    if len(names) == 1:
+        ax = a["axes"][names[0]]
+        for i, key in enumerate(ax):
+            v, m = a["values"][i], med["values"][i]
+            if v is None or m is None:
+                continue
+            l_, h_ = lo["values"][i], hi["values"][i]
+            rows.append({names[0]: key, "value": v, "median": m,
+                         "lo": l_, "hi": h_,
+                         "d": round(v - m, 2),
+                         "out": bool(l_ is not None and (v < l_ or v > h_))})
+    else:
+        ax0, ax1 = names
+        for i, k0 in enumerate(a["axes"][ax0]):
+            for j, k1 in enumerate(a["axes"][ax1]):
+                v = a["values"][i][j]
+                m = med["values"][i][j]
+                if v is None or m is None:
+                    continue
+                l_, h_ = lo["values"][i][j], hi["values"][i][j]
+                rows.append({ax0: k0, ax1: k1, "value": v, "median": m,
+                             "lo": l_, "hi": h_, "d": round(v - m, 2),
+                             "out": bool(l_ is not None and (v < l_ or v > h_))})
+
+    outside = [r for r in rows if r["out"]]
+    outside.sort(key=lambda r: -abs(r["d"]))
+    inside = [r for r in rows if not r["out"]]
+    inside.sort(key=lambda r: -abs(r["d"]))
+    rows = outside + inside
+    if top:
+        rows = rows[:top]
+    return {"metric": a["metric"], "unit": a.get("unit"), "axes": names,
+            "rows": rows, "refs": cor.get("n"),
+            "stats": {"cells": len(outside) + len(inside),
+                      "outside": len(outside),
+                      "share_outside": round(len(outside) / max(1, len(outside) + len(inside)), 3),
+                      "worst": [{"axis": {k: r[k] for k in names}, "d": r["d"]} for r in outside[:3]]}}
+
+
 def compare(a: dict, b: dict, mode: str = "delta", top: int | None = None) -> dict:
     """Сравнить два кадра: разреженный список дельт по общим осям.
 
@@ -189,6 +237,71 @@ def compare(a: dict, b: dict, mode: str = "delta", top: int | None = None) -> di
                          "compared": compared,
                          "missing_a": len(a["coverage"].get("missing") or []),
                          "missing_b": len(b["coverage"].get("missing") or [])}}
+
+
+def corridor(frames_list: list) -> dict:
+    """Коридор по нескольким картинам: медиана и границы (p10..p90).
+
+    Старая спека (FLSTATE §4.4) права: одна цифра обманывает, нужен диапазон.
+    Возвращает три кадра той же формы: median, lo, hi.
+    """
+    if not frames_list:
+        raise ValueError("пустой список картин")
+    base = frames_list[0]
+    names = list(base["axes"])
+    if any(list(f["axes"]) != names for f in frames_list):
+        raise ValueError("у картин разные оси")
+
+    def cell_vals(vals):
+        return [v for v in vals if v is not None]
+
+    if len(names) == 1:
+        n = len(base["axes"][names[0]])
+        med, lo, hi = [], [], []
+        for i in range(n):
+            vals = cell_vals([f["values"][i] for f in frames_list])
+            if not vals:
+                med.append(None); lo.append(None); hi.append(None)
+            else:
+                med.append(round(float(_median(vals)), 2))
+                lo.append(round(float(_pct(vals, 10)), 2))
+                hi.append(round(float(_pct(vals, 90)), 2))
+    else:
+        n0 = len(base["axes"][names[0]])
+        n1 = len(base["axes"][names[1]])
+        med = [[None] * n1 for _ in range(n0)]
+        lo = [[None] * n1 for _ in range(n0)]
+        hi = [[None] * n1 for _ in range(n0)]
+        for i in range(n0):
+            for j in range(n1):
+                vals = cell_vals([f["values"][i][j] for f in frames_list])
+                if not vals:
+                    continue
+                med[i][j] = round(float(_median(vals)), 2)
+                lo[i][j] = round(float(_pct(vals, 10)), 2)
+                hi[i][j] = round(float(_pct(vals, 90)), 2)
+
+    mk = lambda v: {"id": "corridor", "metric": base["metric"], "unit": base.get("unit"),
+                    "axes": base["axes"], "values": v,
+                    "coverage": {"measured": [f["axes"].get("source", ["?"])[0] if "source" in f["axes"] else "?"
+                                              for f in frames_list]}}
+    return {"median": mk(med), "lo": mk(lo), "hi": mk(hi), "n": len(frames_list)}
+
+
+def _median(vals):
+    s = sorted(vals)
+    n = len(s)
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def _pct(vals, q):
+    s = sorted(vals)
+    if len(s) == 1:
+        return s[0]
+    k = (len(s) - 1) * q / 100.0
+    f = int(k)
+    c = min(f + 1, len(s) - 1)
+    return s[f] + (s[c] - s[f]) * (k - f)
 
 
 def to_table(frame_or_cmp: dict, limit: int = 20) -> str:

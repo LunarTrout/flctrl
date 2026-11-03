@@ -72,6 +72,23 @@ def main() -> int:
     except ValueError:
         check("разные метрики не сравниваются", True, "")
 
+    # коридор по трём картинам
+    f1 = F.make_frame("rms", {"band": ["a", "b", "c"]}, [-10.0, -20.0, -30.0])
+    f2 = F.make_frame("rms", {"band": ["a", "b", "c"]}, [-12.0, -18.0, -32.0])
+    f3 = F.make_frame("rms", {"band": ["a", "b", "c"]}, [-14.0, -22.0, -28.0])
+    cor = F.corridor([f1, f2, f3])
+    check("коридор: медиана", cor["median"]["values"] == [-12.0, -20.0, -30.0],
+          str(cor["median"]["values"]))
+    check("коридор: границы", cor["lo"]["values"][0] <= cor["median"]["values"][0]
+          <= cor["hi"]["values"][0], str(cor["lo"]["values"]))
+    check("коридор знает число картин", cor["n"] == 3, str(cor["n"]))
+
+    ours = F.make_frame("rms", {"band": ["a", "b", "c"]}, [-30.0, -20.0, -30.0])
+    cc = F.compare_corridor(ours, cor)
+    check("вылет отмечен флагом", cc["rows"][0].get("out") is True, str(cc["rows"][0]))
+    check("попадание не отмечено", any(r["out"] is False for r in cc["rows"]), "")
+    check("статистика вылетов", cc["stats"]["outside"] >= 1, str(cc["stats"]["outside"]))
+
     check("реестр метрик знает единицы", F.metric_info("partial")["unit"] == "доля", "")
 
     print("\nитог: %d прошло, %d упало" % (len(passed), len(failed)))

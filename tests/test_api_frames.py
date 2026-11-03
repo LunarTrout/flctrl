@@ -64,6 +64,13 @@ def main() -> int:
     check("стена: полосы с центрами", all(isinstance(x, (int, float)) for x in wl["axes"]["band"]),
           str(wl["axes"]["band"]))
 
+    refs = [WAV, WAV]
+    r = api.measure({"metric": "bands", "source": WAV, "a": 10, "b": 20, "against": refs})
+    check("against даёт коридор", r["corridor"]["n"] == 2, str(r["corridor"]["n"]))
+    check("коридор совпадает с нами (тот же файл)", r["compare"]["stats"]["outside"] == 0,
+          str(r["compare"]["stats"]["outside"]))
+    check("отчёт перечисляет референсы", len(r["refs"]) == 2, str(r["refs"]))
+
     try:
         api.measure({"metric": "bands", "source": "live"})
         check("живой источник честно отказывает", False, "приняло live")

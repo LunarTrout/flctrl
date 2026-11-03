@@ -387,6 +387,7 @@ def measure(spec: dict) -> dict:
         raise ApiError("bad_spec", error="нет metric")
     sources = spec.get("sources")
     source = spec.get("source")
+    against = spec.get("against")
     if source == "live" or (isinstance(sources, list) and sources and sources[0] == "live"):
         raise ApiError("not_available", error="живой источник не подключён (tap в работе)")
     if spec.get("metric") in ("sii", "partial"):
@@ -422,9 +423,10 @@ def measure(spec: dict) -> dict:
             values = [r[0] for r in rows]
         unit = {"bands": "дБ (относительно среднего)", "rms": "соны", "peak": "дБ",
                 "crest": "дБ", "lufs": "LUFS"}[metric]
-        return frames.make_frame(metric if metric != "bands" else "bands", axes, values,
-                                 coverage={"measured": [_label(p) for p in sources]},
-                                 unit=unit)
+        return _finish(frames.make_frame("bands" if metric == "bands" else metric,
+                                         axes, values,
+                                         coverage={"measured": [_label(p) for p in sources]},
+                                         unit=unit), metric, spec)
 
     if metric == "transients":
         import transients
@@ -435,9 +437,9 @@ def measure(spec: dict) -> dict:
             if not a_.get("ok"):
                 raise ApiError("measure_failed", error=a_.get("error"))
             rows.append([(a_["bands"].get(n) or {}).get("ts_db") for n in names])
-        return frames.make_frame("transient", {"source": [_label(p) for p in sources],
-                                               "band": names}, rows,
-                                 unit="дБ (удар/хвост)")
+        return _finish(frames.make_frame("transient",
+                                         {"source": [_label(p) for p in sources], "band": names},
+                                         rows, unit="дБ (удар/хвост)"), metric, spec)
 
     if metric == "harmony":
         import harmony
@@ -448,8 +450,9 @@ def measure(spec: dict) -> dict:
             if not a_.get("ok"):
                 raise ApiError("measure_failed", error=a_.get("error"))
             rows.append([round(float(x), 4) for x in a_["chroma"]])
-        return frames.make_frame("harmony", {"source": [_label(p) for p in sources],
-                                             "pitch": names}, rows, unit="доли")
+        return _finish(frames.make_frame("harmony",
+                                         {"source": [_label(p) for p in sources], "pitch": names},
+                                         rows, unit="доли"), metric, spec)
 
     if metric == "wall":
         import wall
@@ -458,9 +461,9 @@ def measure(spec: dict) -> dict:
             w = wall.analyze(path, a, b)
             centers = [b_["fc"] for b_ in w["bands"]]
             rows.append([round(float(x["median_db"]), 2) for x in w["bands"]])
-        return frames.make_frame("wall", {"source": [_label(p) for p in sources],
-                                          "band": centers}, rows,
-                                 unit="дБ (медиана полосы)")
+        return _finish(frames.make_frame("wall",
+                                         {"source": [_label(p) for p in sources], "band": centers},
+                                         rows, unit="дБ (медиана полосы)"), metric, spec)
 
     if metric == "sii":
         import speech
@@ -492,14 +495,41 @@ def measure(spec: dict) -> dict:
                           "harmony", "wall", "sii", "partial"])
 
 
-def compare(a: dict, b: dict, top: int | None = None) -> dict:
+def _finish(frame: dict, metric: str, spec: dict) -> dict:
+    """Если в спеке есть against — вернуть картину вместе с коридором и вылетами."""
+    against = spec.get("against")
+    if not against:
+        return frame
+    if isinstance(against, str):
+        against = [against]
+    refs = []
+    for i, path in enumerate(against):
+        f = measure({"metric": metric, "source": path,
+                     "a": spec.get("a"), "b": spec.get("b"),
+                     "seconds": spec.get("seconds")})
+        refs.append(f)
     import frames
+    cor = frames.corridor(refs)
+    cmp_ = frames.compare_corridor(frame, cor)
+    return {"ours": frame, "refs": [f["axes"]["source"][0] for f in refs],
+            "corridor": {"n": cor["n"], "median": cor["median"]["values"],
+                         "lo": cor["lo"]["values"], "hi": cor["hi"]["values"]},
+            "compare": cmp_}
+
+
+def compare(a, b, top: int | None = None) -> dict:
+    """Сравнить картину с картиной или с набором (коридор по референсам)."""
+    import frames
+    if isinstance(b, list):
+        cor = frames.corridor(b)
+        return frames.compare_corridor(a, cor, top=top)
     return frames.compare(a, b, top=top)
 
 
-def _label(path: str) -> str:
+def _label(path: str, index: int | None = None) -> str:
     base = os.path.basename(str(path).replace("\\", "/"))
-    return re.sub(r"\.(wav|mp3|flac|ogg|m4a)$", "", base)[:40]
+    name = re.sub(r"\.(wav|mp3|flac|ogg|m4a)$", "", base)[:36]
+    return ("%02d:%s" % (index, name)) if index is not None else name
 
 
 # ------------------------------------------------------------------ справка
