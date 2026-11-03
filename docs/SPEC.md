@@ -213,8 +213,9 @@ measure({...}) + compare(до, после)              проверить, чт
   среднего), `rms`, `peak`, `crest`, `lufs`, `transients` (удар/хвост по трём
   полосам), `harmony` (12 ступеней, L2), `wall` (медианы полос), `sii`
   (нужны vocal+masker), `partial` (нужны stems+mix).
-- MCP: `fl_list`, `fl_get`, `fl_set`, `fl_call`, `fl_measure`, `fl_compare`
-  (всего 82 инструмента; старые остаются).
+- MCP по умолчанию — **семь** инструментов: `fl_help`, `fl_list`, `fl_get`,
+  `fl_set`, `fl_call`, `fl_measure`, `fl_compare`. Полный набор (83) включается
+  переменной `FLCTRL_MCP_FULL=1`, старые имена остаются обёртками.
 - Живой источник (`"live"`) честно отвечает `not_available`, пока не готов tap.
 - `docs/snr_baseline.json` помечен: цели получены разделением референсов,
   качество не проверялось, подлежат замене решением обратной задачи.

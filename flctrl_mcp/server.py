@@ -174,9 +174,19 @@ def _maybe_reload() -> bool:
     return changed
 
 
+# Компактная поверхность по умолчанию: семь имён вместо восьмидесяти двух.
+# Полный набор — переменная окружения FLCTRL_MCP_FULL=1.
+FULL = os.environ.get("FLCTRL_MCP_FULL", "0").lower() in ("1", "true", "yes")
+COMPACT_NAMES = {"fl_list", "fl_get", "fl_set", "fl_call", "fl_measure",
+                 "fl_compare", "fl_help"}
+
+
 def tool(fn):
     """Регистрирует инструмент и перед вызовом подхватывает свежий код."""
     import functools
+
+    if not FULL and fn.__name__ not in COMPACT_NAMES:
+        return fn
 
     @functools.wraps(fn)
     def wrapper(*a, **kw):
@@ -343,6 +353,13 @@ def fl_call(op: str, args: dict | None = None) -> dict:
     """Действие: plugin.insert/delete/replace, transport.play/stop, save, track.add."""
     import api
     return api.call(op, args)
+
+
+@tool
+def fl_help(what: str | None = None) -> dict:
+    """Карта поверхности: пути, операции, метрики. what = paths|ops|metrics."""
+    import api
+    return api.help(what)
 
 
 @tool

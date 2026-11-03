@@ -502,6 +502,56 @@ def _label(path: str) -> str:
     return re.sub(r"\.(wav|mp3|flac|ogg|m4a)$", "", base)[:40]
 
 
+# ------------------------------------------------------------------ справка
+
+OPS_HELP = {
+    "plugin.insert": "{track, slot, name} — вставить плагин",
+    "plugin.delete": "{track, slot} — удалить плагин",
+    "plugin.replace": "{track, slot, name} — заменить",
+    "transport.play": "{} — играть",
+    "transport.stop": "{} — стоп",
+    "save": "{backup?} — сохранить проект",
+    "track.add": "{index?, count?} — добавить дорожку",
+    "track.delete": "{index} — удалить дорожку",
+    "plan.apply": "{edits, track_map, slot?} — применить план правок",
+    "eq.set": "{track, slot, gains} — полосы эквалайзера",
+    "system.health": "{} — жив ли мост",
+    "system.doctor": "{} — пробы API",
+}
+
+PATHS_HELP = [
+    "/project", "/transport",
+    "/track/{i}", "/track/{i}/volume|pan|mute|solo",
+    "/track/{i}/slot/{s}", "/track/{i}/slot/{s}/band/{b}",
+    "/track/{i}/slot/{s}/param/{p}",
+    "/track/{i}/send/{d}", "/channel/{i}", "/playlist/clip/{id}",
+    "/section", "/refs/{name}", "/measure/{id}",
+]
+
+
+def help(what: str | None = None) -> dict:
+    """Карта поверхности: пути, операции, метрики, глаголы.
+
+    Один вызов вместо чтения документации: что вообще бывает и как называется.
+    """
+    import frames
+    if what in (None, "", "all"):
+        return {"verbs": ["list", "get", "set", "call", "measure", "compare"],
+                "paths": PATHS_HELP,
+                "ops": OPS_HELP,
+                "metrics": {k: {"unit": v["unit"], "axes": list(v["axes"]),
+                                "source": v["source"]} for k, v in frames.METRICS.items()},
+                "measures_now": ["bands", "rms", "peak", "crest", "lufs",
+                                 "transients", "harmony", "wall", "sii", "partial"]}
+    if what == "paths":
+        return {"paths": PATHS_HELP}
+    if what == "ops":
+        return {"ops": OPS_HELP}
+    if what == "metrics":
+        return {"metrics": {k: v["unit"] for k, v in frames.METRICS.items()}}
+    raise ApiError("unknown_help", what, known=["paths", "ops", "metrics"])
+
+
 # ------------------------------------------------------------------ служебное
 
 def _project_name() -> str | None:
