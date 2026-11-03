@@ -1,5 +1,7 @@
 # Live capture: how per-track audio is obtained
 
+**English** · [Русский](LIVE.ru.md)
+
 The problem: FL Studio has no API that returns the audio of a mixer track. Meters give
 envelopes, the song renders as a single file, and stems require a manual export option.
 

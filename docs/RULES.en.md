@@ -1,5 +1,7 @@
 # Operational rules learned the hard way
 
+**English** · [Русский](RULES.md)
+
 Not preferences — things that cost crashed FL sessions and lost time. Apply them in every
 new project.
 

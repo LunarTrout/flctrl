@@ -1,5 +1,7 @@
 # API operations
 
+**English** · [Русский](API.ru.md)
+
 Single entry point: `flctrl.api.call(op, args) -> dict`. The MCP server exposes the same
 surface through ten tools (`fl_help`, `fl_list`, `fl_get`, `fl_set`, `fl_call`, `fl_measure`,
 `fl_compare`, `fl_undo`, `fl_dry_run`, `fl_project`).

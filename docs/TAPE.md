@@ -1,5 +1,7 @@
 # The tape: every field, what it means, how to read it
 
+**English** · [Русский](TAPE.ru.md)
+
 The tape is the library's unit of description. One tape per track per capture, plus
 derived layers (events, masking, provenance).
 

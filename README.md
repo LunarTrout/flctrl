@@ -1,5 +1,7 @@
 # flctrl — measurement-first mixing for FL Studio
 
+**English** · [Русский](README.ru.md)
+
 `flctrl` is a Python library that lets a machine *hear* an FL Studio project the way an
 engineer does: it captures the audio of every mixer track **live**, turns it into a dense
 but readable description (a "tape"), catches short events that a 100 ms window would

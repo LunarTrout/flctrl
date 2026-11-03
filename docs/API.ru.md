@@ -1,5 +1,7 @@
 # Операции API
 
+[English](API.md) · **Русский**
+
 Единственная точка входа: `flctrl.api.call(op, args) -> dict`. MCP-сервер выставляет ту же
 поверхность десятью инструментами (`fl_help`, `fl_list`, `fl_get`, `fl_set`, `fl_call`,
 `fl_measure`, `fl_compare`, `fl_undo`, `fl_dry_run`, `fl_project`).
