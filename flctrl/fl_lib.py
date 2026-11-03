@@ -1078,6 +1078,23 @@ class _Realtime:
                              duration_s, rate_hz)
 
     @staticmethod
+    def play_plan(plan: dict, track_map: dict, duration_s: float | None = None,
+                  rate_hz: float = 20.0) -> dict:
+        """Проиграть план панорамы вживую: стем -> номер дорожки микшера."""
+        import realtime as rt
+
+        curves = rt.from_plan(plan, plan.get("section_s") or 8.0)
+        mapped = {int(track_map[stem]): fn for stem, fn in curves.items()
+                  if stem in track_map}
+        if not mapped:
+            return {"started": False, "error": "ни один стем не сопоставлен дорожке"}
+        total = max([max(p["t"] for p in plan["stems"][st]["points"])
+                     for st in curves if st in track_map] or [0.0])
+        dur = duration_s or (total + (plan.get("section_s") or 8.0))
+        mover = rt.play_curves(_Realtime._client(), mapped, dur, rate_hz)
+        return {"mover": mover, "tracks": sorted(mapped), "duration_s": dur}
+
+    @staticmethod
     def _client():
         import sys
         return sys.modules[__name__]

@@ -70,6 +70,82 @@ class Mover:
         return dict(self.stats)
 
 
+class MultiMover:
+    """Один поток ведёт несколько дорожек сразу — так движется вся картина.
+
+    Отдельные потоки на каждую дорожку дали бы разное время старта и разъезд
+    между парными инструментами; здесь общий такт, поэтому зеркальная пара
+    остаётся зеркальной.
+    """
+
+    def __init__(self, write, rate_hz: float = 20.0):
+        self.write = write            # write(track, value)
+        self.period = 1.0 / max(rate_hz, 0.5)
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.stats = {"writes": 0, "errors": 0, "last_error": "", "max_lag_ms": 0.0}
+
+    def run(self, curves: dict, duration_s: float) -> dict:
+        self._stop.clear()
+        self.stats.update({"writes": 0, "errors": 0, "last_error": "", "max_lag_ms": 0.0})
+        t0 = time.perf_counter()
+
+        def loop():
+            planned = t0
+            while not self._stop.is_set():
+                now = time.perf_counter()
+                elapsed = now - t0
+                if elapsed >= duration_s:
+                    break
+                for track, curve in curves.items():
+                    try:
+                        self.write(track, float(curve(elapsed)))
+                        self.stats["writes"] += 1
+                    except Exception as exc:
+                        self.stats["errors"] += 1
+                        self.stats["last_error"] = str(exc)[:120]
+                planned += self.period
+                lag = (planned - time.perf_counter()) * 1000
+                if lag < 0:
+                    self.stats["max_lag_ms"] = max(self.stats["max_lag_ms"], -lag)
+                else:
+                    self._stop.wait(lag / 1000.0)
+
+        self._thread = threading.Thread(target=loop, daemon=True)
+        self._thread.start()
+        return {"started": True, "tracks": len(curves), "duration_s": duration_s}
+
+    def stop(self, timeout_s: float = 5.0) -> dict:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout_s)
+        return dict(self.stats)
+
+
+def from_plan(plan: dict, section_s: float) -> dict:
+    """Точки плана панорамы -> кривые по дорожкам.
+
+    План `panplan.plan` даёт точки {t, pan} для каждого стема. Здесь они
+    превращаются в кривые, готовые к проигрыванию: пары движутся синхронно.
+    """
+    curves = {}
+    for stem, row in (plan.get("stems") or {}).items():
+        if "points" not in row:
+            continue
+        pts = [(float(p["t"]), float(p["pan"])) for p in row["points"]]
+        if pts:
+            curves[stem] = lerp_curve(pts)
+    return curves
+
+
+def play_curves(fl, curves: dict, duration_s: float, rate_hz: float = 20.0):
+    """Проиграть кривые панорамы: curves = {дорожка: функция времени}."""
+    mover = MultiMover(lambda track, v: fl.act.pan_live(track, max(-1.0, min(1.0, v))),
+                       rate_hz)
+    mover.run(curves, duration_s)
+    return mover
+
+
 def lerp_curve(points: list[tuple[float, float]]):
     """Кривая по точкам [(время, значение)]: линейно между, константа по краям."""
     pts = sorted(points)

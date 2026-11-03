@@ -20,6 +20,17 @@ TRACK = 1
 SECONDS = 3.0
 
 
+
+def _guard() -> bool:
+    """Живые тесты пишут в проект — пускать их можно только в тестовый."""
+    import render_job
+    title = (render_job.window_title() or "").lower()
+    if "small" not in title:
+        print("открыт не тестовый проект (%r) — тест остановлен" % title[:60])
+        return False
+    return True
+
+
 def main() -> int:
     passed, failed = [], []
 
@@ -27,6 +38,8 @@ def main() -> int:
         (passed if cond else failed).append(name)
         print(("ок      " if cond else "ПАДЕНИЕ ") + "%-44s %s" % (name, detail))
 
+    if not _guard():
+        return 2
     h = fl.state.health()
     print("FL:", h.get("project"), "| дорожек:", h.get("tracks"))
     if not h.get("bridge"):

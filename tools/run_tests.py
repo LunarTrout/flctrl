@@ -25,7 +25,7 @@ TESTS = os.path.join(ROOT, "tests")
 
 # Живые тесты: им нужен FL Studio и они пишут в открытый проект
 LIVE = {"test_clean_project.py", "test_live_plugin.py", "test_live_tracks.py",
-        "test_apply_eq.py", "test_realtime_pan.py"}
+        "test_apply_eq.py", "test_realtime_pan.py", "test_play_plan.py"}
 TEST_FLP = os.environ.get("FLCTRL_TEST_FLP", r"C:/Users/epicc/tools/fltest/small.flp")
 
 
@@ -91,7 +91,9 @@ def _ensure_test_project() -> str:
         return "FL не показала проект за 120 с"
 
     fl_exe = os.environ.get("FLCTRL_FL_EXE") or r"C:\Programs\Fl Studio 2025\FL64.exe"
-    subprocess.Popen([fl_exe, TEST_FLP], close_fds=True)
+    # рабочий каталог FL важен: из чужого каталога окно не показывается
+    subprocess.Popen([fl_exe, TEST_FLP], close_fds=True,
+                     cwd=os.path.dirname(fl_exe))
     t0 = time.time()
     while time.time() - t0 < 180:
         if want in title():

@@ -40,13 +40,26 @@ def fl_running() -> bool:
 
 
 def window_title() -> str:
-    """Заголовок главного окна FL ('' если окна нет)."""
+    """Заголовок главного окна FL ('' если окна нет).
+
+    pywin32 есть не везде, поэтому основной путь — ctypes: без него все проверки
+    «какой проект открыт» молча возвращали пустоту и тесты пропускались.
+    """
     try:
         import win32gui
+        h = win32gui.FindWindow("TFruityLoopsMainForm", None)
+        return win32gui.GetWindowText(h) if h else ""
     except ImportError:
+        pass
+    import ctypes
+    u = ctypes.windll.user32
+    h = u.FindWindowW(ctypes.c_wchar_p("TFruityLoopsMainForm"), None)
+    if not h:
         return ""
-    h = win32gui.FindWindow("TFruityLoopsMainForm", None)
-    return win32gui.GetWindowText(h) if h else ""
+    n = u.GetWindowTextLengthW(h)
+    buf = ctypes.create_unicode_buffer(max(n + 1, 2))
+    u.GetWindowTextW(h, buf, max(n + 1, 2))
+    return buf.value
 
 
 def close_fl(timeout_s: float = 90.0, save_first: bool = True) -> bool:
