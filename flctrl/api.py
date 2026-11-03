@@ -618,9 +618,9 @@ def measure(spec: dict) -> dict:
     against = spec.get("against")
     if source == "live" or (isinstance(sources, list) and sources and sources[0] == "live"):
         raise ApiError("not_available", error="живой источник не подключён (tap в работе)")
-    if spec.get("metric") in ("sii", "partial"):
+    if spec.get("metric") in ("sii", "partial", "masking"):
         sources = []          # этим метрикам файл-источник не нужен
-    if (not sources and spec.get("metric") not in ("sii", "partial")
+    if (not sources and spec.get("metric") not in ("sii", "partial", "masking")
             and spec.get("by") != "role"):
         if not source:
             raise ApiError("bad_spec", error="нужен source или sources")
@@ -779,9 +779,43 @@ def measure(spec: dict) -> dict:
         return frames.make_frame("partial", {"source": roles, "band": regions}, values,
                                  unit="дБ (частичная громкость)")
 
+    if metric == "masking":
+        import audit
+        stems = spec.get("stems") or (roles_for(sources) if sources else {})
+        if len(stems) < 2:
+            raise ApiError("bad_spec", error="masking требует два и более источников")
+        levels, regions = {}, None
+        for role, path in stems.items():
+            m = audit.measure(path, spec.get("a"), spec.get("b"))
+            levels[role] = m["bands_db"]
+            regions = regions or _band_labels(m)
+        pairs, rows = [], []
+        for masker in sorted(levels):
+            for target in sorted(levels):
+                if masker == target:
+                    continue
+                pairs.append("%s>%s" % (masker, target))
+                # Маска имеет смысл только там, где цель вообще звучит: если в
+                # полосе у цели на 40 дБ меньше её же пика, это «нечего забивать».
+                peak = max(levels[target]) if levels[target] else 0.0
+                rows.append([0.0 if lt < peak - 40 else round(min(60.0, max(0.0, lm - lt)), 1)
+                             for lm, lt in zip(levels[masker], levels[target])])
+        return _finish(frames.make_frame("masking", {"pair": pairs, "band": regions}, rows,
+                                         unit="дБ (насколько маскер громче цели)"),
+                       metric, spec)
+
     raise ApiError("unknown_metric", metric,
                    known=["bands", "rms", "peak", "crest", "lufs", "transients",
-                          "harmony", "wall", "sii", "partial"])
+                          "harmony", "wall", "sii", "partial", "masking"])
+
+
+def _band_labels(m: dict) -> list:
+    """Подписи полос: частоты из метрики, иначе индексы."""
+    for key in ("band_hz", "bands_hz", "centers"):
+        if isinstance(m.get(key), list):
+            return [int(x) for x in m[key]]
+    n = len(m.get("bands_db") or [])
+    return ["полоса %d" % (i + 1) for i in range(n)]
 
 
 def roles_for(sources: list) -> dict:
