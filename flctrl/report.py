@@ -63,6 +63,17 @@ def _derive_actions(res: dict) -> list[str]:
         actions.append("разборчивость вокала SII %.2f — %s; хуже всего %d Гц" % (
             sp["sii"], sp.get("grade") or "", sp.get("worst_band") or 0))
 
+    wl = res.get("wall") or {}
+    if wl.get("mine"):
+        w = wl["mine"]
+        c = wl.get("compare") or {}
+        actions.append("стена: толщина %.2f, провалов %d%s" % (
+            w["thickness"], w["hole_count"],
+            (" (%s)" % c["holes"]["verdict"]) if c.get("holes") else ""))
+        for h in w["holes"][:3]:
+            actions.append("провал на %.0f с: полоса %d Гц упала на %.1f дБ — "
+                           "проверить, что там играет" % (h["t"], h["band"], h["drop_db"]))
+
     ef = res.get("effects_ir") or {}
     if ef.get("rt60"):
         actions.append("реверб: RT60 %.2f с, EDT %.2f с, C50 %.1f дБ — сверить "
@@ -176,6 +187,28 @@ def to_markdown(rep: dict) -> str:
         lines.append("")
         for tip in pan_res["advice"]:
             lines.append("- %s: %s — %s" % (tip["stem"], tip["action"], tip["why"]))
+
+    wl = res.get("wall")
+    if wl and wl.get("mine"):
+        w = wl["mine"]
+        c = wl.get("compare") or {}
+        lines.append("")
+        lines.append("## Стена и провалы")
+        lines.append("")
+        lines.append("Толщина **%.2f**%s, провалов **%d**%s." % (
+            w["thickness"],
+            (" (%s)" % c["thickness"]["verdict"]) if c.get("thickness") else "",
+            w["hole_count"],
+            (" (%s)" % c["holes"]["verdict"]) if c.get("holes") else ""))
+        if w["holes"]:
+            lines.append("")
+            lines.append("| время, с | полоса, Гц | провал, дБ |")
+            lines.append("|---|---|---|")
+            for h in w["holes"]:
+                lines.append("| %.0f | %d | %.1f |" % (h["t"], h["band"], h["drop_db"]))
+        else:
+            lines.append("Провалов по полосам нет: каждая полоса держится "
+                         "в пределах 8 дБ от своей медианы.")
 
     sp = res.get("speech")
     if sp:

@@ -410,6 +410,22 @@ def fl_report(mine: str, refs: list[str] | None = None,
 
 
 @tool
+def fl_wall(mine: str, refs: list[str], a: float | None = None,
+            b: float | None = None, section_s: float = 8.0) -> dict:
+    """Провалы по полосам и толщина «стены», в сравнении с референсами.
+
+    Провал — выпадение полосы относительно самого трека (секция, где середина
+    рухнула при живых низах и верхах), а не тихий микс. Толщина — доля времени,
+    когда полная энергия держится в коридоре ±6 дБ от медианы.
+    """
+    import wall
+
+    m = wall.analyze(mine, a, b, section_s)
+    r = [wall.analyze(x, a, b, section_s) for x in refs]
+    return {"mine": m, "compare": wall.compare(m, r)}
+
+
+@tool
 def fl_pan_plan(stems: dict, a: float | None = None, b: float | None = None,
                 section_s: float = 8.0, max_step: float = 0.15,
                 max_pan: float = 0.7) -> dict:

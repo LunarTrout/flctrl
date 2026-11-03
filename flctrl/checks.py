@@ -31,6 +31,13 @@ def _fronts(ctx: dict) -> dict:
     return audit.audit(mine, refs)
 
 
+def _wall(ctx: dict) -> dict:
+    import wall
+    mine = wall.analyze(ctx["mix"], ctx.get("a"), ctx.get("b"))
+    refs = [wall.analyze(r, ctx.get("a"), ctx.get("b")) for r in ctx["refs"]]
+    return {"mine": mine, "compare": wall.compare(mine, refs)}
+
+
 def _sections(ctx: dict) -> dict:
     import seccomp
     return seccomp.compare(ctx["mine"], ctx["refs"], ctx.get("a"), ctx.get("b"))
@@ -82,6 +89,8 @@ REGISTRY: list[Check] = [
           extra={"part_of": "fronts"}),
     Check("sections", "Сопоставление одинаковых участков", ("mix", "refs"),
           _sections, "микс"),
+    Check("wall", "Провалы по полосам и толщина стены", ("mix", "refs"),
+          _wall, "микс"),
     Check("roles", "Слышимость ролей (partial loudness)", ("stems",),
           _roles, "роли"),
     Check("speech", "Разборчивость вокала (SII, ANSI S3.5)",
