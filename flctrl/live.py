@@ -208,6 +208,102 @@ def stop_daemon() -> dict:
         return {"ok": False, "error": str(exc)[:120]}
 
 
+def fl_window() -> dict:
+    """Главное окно FL: заголовок (в нём имя проекта) и хэндл."""
+    import ctypes
+    u = ctypes.windll.user32
+    found = {}
+
+    def cb(h, _l):
+        if not u.IsWindowVisible(h):
+            return True
+        n = ctypes.create_unicode_buffer(512)
+        u.GetWindowTextW(h, n, 512)
+        if "FL Studio" in n.value and n.value.strip().endswith("FL Studio 2025"):
+            found["hwnd"] = h
+            found["title"] = n.value
+            return False
+        return True
+
+    u.EnumWindows(ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(cb), 0)
+    return found
+
+
+PROJECT_ROOTS = [
+    os.path.join(os.environ.get("USERPROFILE", "C:/"), "Desktop", "PROJECTS"),
+    os.path.join(os.environ.get("USERPROFILE", "C:/"), "Documents", "Image-Line",
+                 "FL Studio", "Projects"),
+    os.path.join(os.environ.get("USERPROFILE", "C:/"), "Documents"),
+]
+
+
+def _find_project(name: str, max_depth: int = 3) -> str | None:
+    """Найти файл проекта по имени из заголовка окна."""
+    for root in PROJECT_ROOTS:
+        if not os.path.isdir(root):
+            continue
+        base_depth = os.path.normpath(root).count(os.sep)
+        for dirpath, dirnames, filenames in os.walk(root):
+            if dirpath.count(os.sep) - base_depth > max_depth:
+                dirnames[:] = []
+                continue
+            dirnames[:] = [d for d in dirnames if d.lower() not in
+                           ("backup", "node_modules", ".git", "recorded", "_analysis")]
+            if name in filenames:
+                return os.path.join(dirpath, name)
+    return None
+
+
+def save_project(timeout: float = 15.0) -> dict:
+    """Сохранить проект в FL через Ctrl+S и вернуть путь к файлу.
+
+    Нужно, чтобы точка сохранения отражала текущее состояние, а не автосейв.
+    """
+    import ctypes
+    win = fl_window()
+    if not win.get("hwnd"):
+        return {"ok": False, "error": "окно FL не найдено"}
+    title = win["title"]
+    name = title.split(" - ")[0].strip()
+    if not name.lower().endswith(".flp"):
+        return {"ok": False, "error": "в заголовке нет имени проекта: %r" % title}
+    path = _find_project(name)
+    before = os.path.getmtime(path) if path and os.path.isfile(path) else None
+
+    u = ctypes.windll.user32
+    u.ShowWindow(win["hwnd"], 5)
+    fg = u.GetForegroundWindow()
+    tid_fg = u.GetWindowThreadProcessId(fg, None)
+    tid_fl = u.GetWindowThreadProcessId(win["hwnd"], None)
+    if tid_fg != tid_fl:
+        u.AttachThreadInput(tid_fg, tid_fl, True)
+    u.SetForegroundWindow(win["hwnd"])
+    u.BringWindowToTop(win["hwnd"])
+    time.sleep(0.4)
+    if tid_fg != tid_fl:
+        u.AttachThreadInput(tid_fg, tid_fl, False)
+    if u.GetForegroundWindow() != win["hwnd"]:
+        return {"ok": False, "error": "FL не в фокусе — Ctrl+S не отправляю"}
+    VK_CONTROL, VK_S = 0x11, 0x53
+    KEYEVENTF_KEYUP = 2
+    u.keybd_event(VK_CONTROL, 0, 0, 0)
+    u.keybd_event(VK_S, 0, 0, 0)
+    time.sleep(0.05)
+    u.keybd_event(VK_S, 0, KEYEVENTF_KEYUP, 0)
+    u.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        path = _find_project(name) or path
+        if path and os.path.isfile(path):
+            if before is None or os.path.getmtime(path) > before + 0.001:
+                return {"ok": True, "file": path, "mtime": round(os.path.getmtime(path))}
+        time.sleep(0.3)
+    if path and os.path.isfile(path):
+        return {"ok": False, "error": "Ctrl+S не изменил файл", "file": path}
+    return {"ok": False, "error": "файл проекта не найден"}
+
+
 def _sha1(path: str) -> str:
     import hashlib
     h = hashlib.sha1()
@@ -232,44 +328,50 @@ def snapshots(limit: int = 50) -> list:
     return rows[:limit]
 
 
-def backup(max_age_s: float = 3600.0, keep: int = 20) -> dict:
-    """Точка сохранения перед снимком: копия последнего автосейва FL.
+def backup(max_age_s: float = 3600.0, keep: int = 20, save: bool = True) -> dict:
+    """Точка сохранения перед снимком.
 
-    Одинаковые автосейвы не дублируются (сверка по sha1), старые точки
-    подрезаются до `keep`.
+    save=True — сначала сохраняем проект в FL (Ctrl+S), чтобы точка отражала
+    текущее состояние. Если сохранить не вышло — берём последний автосейв FL.
+    Одинаковые файлы не дублируются (sha1), старые точки подрезаются до `keep`.
     """
     import shutil
-    if not os.path.isdir(AUTOSAVE_DIR):
-        return {"ok": False, "error": "нет папки автосейвов FL"}
-    files = [os.path.join(AUTOSAVE_DIR, f) for f in os.listdir(AUTOSAVE_DIR)
-             if f.lower().endswith(".flp")]
-    if not files:
-        return {"ok": False, "error": "автосейвов нет"}
-    newest = max(files, key=os.path.getmtime)
-    age = time.time() - os.path.getmtime(newest)
-    if age > max_age_s:
-        return {"ok": False, "error": "автосейв старше %.0f мин" % (age / 60),
-                "file": newest, "age_s": round(age)}
-    digest = _sha1(newest)
+
+    saved = save_project() if save else {"ok": False}
+    if saved.get("ok"):
+        src, age, origin = saved["file"], 0, "save"
+    else:
+        if not os.path.isdir(AUTOSAVE_DIR):
+            return {"ok": False, "error": saved.get("error") or "нет папки автосейвов FL"}
+        files = [os.path.join(AUTOSAVE_DIR, f) for f in os.listdir(AUTOSAVE_DIR)
+                 if f.lower().endswith(".flp")]
+        if not files:
+            return {"ok": False, "error": "автосейвов нет"}
+        src = max(files, key=os.path.getmtime)
+        age = time.time() - os.path.getmtime(src)
+        origin = "autosave"
+        if age > max_age_s:
+            return {"ok": False, "error": "автосейв старше %.0f мин" % (age / 60),
+                    "file": src, "age_s": round(age)}
+
+    digest = _sha1(src)
     existing = snapshots(limit=200)
     for row in existing:
-        if row["size"] == os.path.getsize(newest) and _sha1(row["file"]) == digest:
-            return {"ok": True, "file": row["file"], "skipped": "тот же автосейв",
-                    "age_s": round(age), "points": len(existing)}
+        if row["size"] == os.path.getsize(src) and _sha1(row["file"]) == digest:
+            return {"ok": True, "file": row["file"], "skipped": "без изменений",
+                    "origin": origin, "points": len(existing)}
     os.makedirs(BACKUP_DIR, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    dst = os.path.join(BACKUP_DIR, "%s_%s" % (stamp, os.path.basename(newest)))
-    shutil.copy2(newest, dst)
+    dst = os.path.join(BACKUP_DIR, "%s_%s" % (stamp, os.path.basename(src)))
+    shutil.copy2(src, dst)
     for row in snapshots(limit=1000)[keep:]:
         try:
             os.remove(row["file"])
         except OSError:
             pass
-    return {"ok": True, "file": dst, "source": newest, "age_s": round(age),
-            "points": len(snapshots(limit=1000))}
+    return {"ok": True, "file": dst, "source": src, "origin": origin,
+            "age_s": round(age), "points": len(snapshots(limit=1000))}
 
-
-# ---------------------------------------------------------------------- снимок
 
 def capture_memory(tracks=None, seconds: float = 2.0, start: float | None = None,
                    fade: bool = True, want_audio: bool = False) -> dict:
