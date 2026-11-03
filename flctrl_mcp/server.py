@@ -410,6 +410,23 @@ def fl_report(mine: str, refs: list[str] | None = None,
 
 
 @tool
+def fl_pan_plan(stems: dict, a: float | None = None, b: float | None = None,
+                section_s: float = 8.0, max_step: float = 0.15,
+                max_pan: float = 0.7) -> dict:
+    """План движения панорамы по секциям, выведенный из измерений.
+
+    Куда инструмент отходит и насколько — задаёт измеренная ширина секции:
+    плотно — шире, разрежено — ближе к центру; шаг ограничен, низ не двигается.
+    Возвращает точки {t, pan, why} на каждый стем и проверки плана.
+    """
+    import panplan as pp
+
+    res = pp.plan(stems, a, b, section_s, max_step, max_pan)
+    res["check"] = pp.check(res)
+    return res
+
+
+@tool
 def fl_sii(vocal: str, masker: str) -> dict:
     """Разборчивость вокала в миксе по ANSI S3.5 (SII 0..1).
 
