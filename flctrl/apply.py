@@ -124,6 +124,54 @@ def apply_eq(fl, track: int, slot: int, gains: dict, verify: bool = True) -> dic
     return {"ok": ok, "applied": applied, "verify": check}
 
 
+def apply_plan(fl, edits: list[dict], track_map: dict, slot: int = 0,
+               ensure_eq: bool = True, save: bool = True) -> dict:
+    """Применить план целиком: сгруппировать правки по инструментам и вставить EQ.
+
+    Один инструмент — одна дорожка — один эквалайзер: полосы разных правок
+    складываются в усиления по областям, поэтому несколько строк плана на один
+    инструмент не создают несколько плагинов.
+    """
+    if fl is None:
+        import fl_lib as fl
+
+    by_stem: dict = {}
+    for e in edits:
+        stem = e.get("stem")
+        if stem is None or stem not in track_map:
+            continue
+        by_stem.setdefault(stem, {}).setdefault(e["region"], []).append(e["do_db"])
+
+    results = {}
+    ok_all = True
+    for stem, regions in by_stem.items():
+        track = int(track_map[stem])
+        gains = {r: float(sum(v) / len(v)) for r, v in regions.items()}
+        params = fl.act.params(track, slot)
+        inserted = False
+        if not params and ensure_eq:
+            ins = fl.create.live_insert(track, slot, "Fruity Parametric EQ 2")
+            inserted = bool(ins.get("ok"))
+            params = fl.act.params(track, slot) if inserted else []
+        if not params:
+            results[stem] = {"ok": False, "error": "нет плагина в слоте и вставить не удалось"}
+            ok_all = False
+            continue
+        res = apply_eq(fl, track, slot, gains)
+        results[stem] = {"track": track, "inserted": inserted,
+                         "ok": bool(res.get("ok")), "applied": res.get("applied"),
+                         "error": res.get("error")}
+        ok_all = ok_all and bool(res.get("ok"))
+
+    if save:
+        try:
+            import flsave
+            flsave.save(make_backup=False)
+        except Exception:
+            pass
+    return {"ok": ok_all, "tracks": results, "applied_count": len(results)}
+
+
 def _param_text(params: list[dict], band: int, level: bool = True) -> str | None:
     name = ("Band %d level" if level else "Band %d freq") % band
     p = _find(params, name)

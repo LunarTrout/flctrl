@@ -25,7 +25,7 @@ TESTS = os.path.join(ROOT, "tests")
 
 # Живые тесты: им нужен FL Studio и они пишут в открытый проект
 LIVE = {"test_clean_project.py", "test_live_plugin.py", "test_live_tracks.py",
-        "test_apply_eq.py", "test_realtime_pan.py", "test_play_plan.py"}
+        "test_apply_eq.py", "test_realtime_pan.py", "test_play_plan.py", "test_apply_plan.py"}
 TEST_FLP = os.environ.get("FLCTRL_TEST_FLP", r"C:/Users/epicc/tools/fltest/small.flp")
 
 
@@ -51,6 +51,16 @@ def _python() -> str:
         if os.path.exists(p):
             return p
     return cand if os.path.exists(cand) else sys.executable
+
+
+def _order(name: str):
+    """Порядок важен: тест чистого проекта сам закрывает FL для рендера,
+    поэтому он идёт последним, а живые тесты — после офлайн."""
+    if name == "test_clean_project.py":
+        return (2, name)
+    if name in LIVE:
+        return (1, name)
+    return (0, name)
 
 
 def _ensure_test_project() -> str:
@@ -109,8 +119,9 @@ def main(argv=None) -> int:
     ap.add_argument("--timeout", type=float, default=900)
     a = ap.parse_args(argv)
 
-    files = sorted(f for f in os.listdir(TESTS)
-                   if f.startswith("test_") and f.endswith(".py"))
+    files = sorted((f for f in os.listdir(TESTS)
+                    if f.startswith("test_") and f.endswith(".py")),
+                   key=_order)
     if a.k:
         files = [f for f in files if a.k in f]
     if not files:

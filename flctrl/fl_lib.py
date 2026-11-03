@@ -1026,7 +1026,13 @@ class _Act:
         """Параметры плагина кусками: длинный ответ мост режет и он приходит пустым."""
         import json as _json
 
-        n = int(_State._live("plugins.getParamCount(%d, %d)" % (track, slot)))
+        try:
+            n = int(_State._live("plugins.getParamCount(%d, %d)" % (track, slot)))
+        except Exception as exc:
+            # пустой слот отвечает «Plugin not valid» — это не ошибка чтения
+            if "not valid" in str(exc).lower():
+                return []
+            raise
         out = []
         for a in range(0, n, chunk):
             b = min(a + chunk, n)
@@ -1119,6 +1125,13 @@ class _Apply:
         """
         import apply as apply_mod
         return apply_mod.apply_eq(None, track, slot, gains)
+
+    @staticmethod
+    def plan(edits: list, track_map: dict, slot: int = 0,
+             ensure_eq: bool = True) -> dict:
+        """Применить весь план к живым дорожкам: стем -> номер дорожки."""
+        import apply as apply_mod
+        return apply_mod.apply_plan(None, edits, track_map, slot, ensure_eq)
 
 
 # ---------------------------------------------------------------- create

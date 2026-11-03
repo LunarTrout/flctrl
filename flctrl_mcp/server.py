@@ -317,6 +317,17 @@ def fl_simulate(mix_path: str, stems: dict, targets_path: str | None = None,
 
 
 @tool
+def fl_apply_plan(edits: list, track_map: dict, slot: int = 0) -> dict:
+    """Применить весь план к живым дорожкам: правки -> эквалайзеры.
+
+    `edits` — список правок плана ({stem, region, do_db}), `track_map` — какой
+    стем на какой дорожке микшера. Если в слоте пусто, ставит Fruity Parametric
+    EQ 2 вживую; повторный вызов не плодит плагины. Сохраняет проект один раз.
+    """
+    return fl.apply.plan(edits, track_map, slot)
+
+
+@tool
 def fl_move_pan(track: int, points: list, duration_s: float,
                 rate_hz: float = 20.0) -> dict:
     """Провести панораму дорожки по точкам [(время_с, значение -1..1)] вживую.
