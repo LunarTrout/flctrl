@@ -131,7 +131,7 @@ Measured on real material (drums, 1.52 s, 15 cells):
 | events | 1 486 |
 | whole tape (JSON) | 22 512 |
 
-Scaling: 14.5 KB per second per track; 29 tracks × 10 s ≈ 4.1 MB. Raw PCM for the same
+Scaling: 14.5 KB per second per track; a 29-track project × 10 s ≈ 4.1 MB. Raw PCM for the same
 audio is 97.6 MB.
 
 Practical rule: keep tapes in memory, keep audio only if you need to listen.

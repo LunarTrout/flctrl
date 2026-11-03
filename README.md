@@ -41,7 +41,7 @@ tracks at all. `flctrl` closes the gap from both sides.
 
 | Side | What we have | What we do |
 |---|---|---|
-| Your project | 29 mixer tracks, every knob reachable | capture each track live, measure it, keep the numbers |
+| Your project | any number of mixer tracks, every knob reachable | capture each track live, measure it, keep the numbers |
 | Reference | one stereo file, no stems | measure it with the same code, same bands, same time grid |
 | Comparison | different sources | put both in one cube (`time × track/role × band × metric`) and subtract |
 
@@ -114,6 +114,10 @@ print(tape["lufs"], tape["lra"], tape["sii"], ev["count"])
 
 Two implementations, identical output.
 
+The track list is read from the project at capture time (`mixer.getTrackCount()`):
+nothing about the number of tracks is hardcoded, and any project size works. The counts
+quoted below are the size of the test project, not a limit.
+
 **`files` (default, recommended).** Save the project with Ctrl+S and copy the `.flp` as a
 restore point, arm the tracks, start recording, play from `start`, read the WAVs FL wrote,
 compute the tape, delete them, disarm, restore the previous mode. The `Recorded` folder is
@@ -149,7 +153,7 @@ Per track: `lufs`, `lra`, `sii`, `harmony`, `checks` (DC, clipped samples, mono
 correlation), `transients`, `mod_rate_hz`, `mod_depth`, `jitter_pct`, `technique`.
 Per capture: `masking`, `provenance`, `position`.
 
-Measured sizes: cell ~1.0 KB; one track one second 14.5 KB; 29 tracks × 10 s ≈ 4.1 MB
+Measured sizes: cell ~1.0 KB; one track one second 14.5 KB; a 29-track project × 10 s ≈ 4.1 MB
 (versus 97.6 MB of raw PCM).
 
 Full reference: [docs/TAPE.md](docs/TAPE.md) · [docs/TAPE.ru.md](docs/TAPE.ru.md)
@@ -236,12 +240,19 @@ tools/           test runner and audits
 | Mixing against one reference | [docs/REFERENCE.md](docs/REFERENCE.md) | [docs/REFERENCE.ru.md](docs/REFERENCE.ru.md) |
 | API operations | [docs/API.md](docs/API.md) | [docs/API.ru.md](docs/API.ru.md) |
 | Operational rules learned the hard way | [docs/RULES.en.md](docs/RULES.en.md) | [docs/RULES.md](docs/RULES.md) |
-| Design specification | — | [docs/SPEC.md](docs/SPEC.md) |
-| Status | — | [docs/STATUS.md](docs/STATUS.md) |
+| How the library is built | [ARCHITECTURE.en.md](ARCHITECTURE.en.md) | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| Design specification | [docs/SPEC.en.md](docs/SPEC.en.md) | [docs/SPEC.md](docs/SPEC.md) |
+| Status: verified vs not | [docs/STATUS.en.md](docs/STATUS.en.md) | [docs/STATUS.md](docs/STATUS.md) |
+| Roadmap | [docs/ROADMAP.en.md](docs/ROADMAP.en.md) | [docs/ROADMAP.md](docs/ROADMAP.md) |
+| Streaming metrics | [docs/STREAMING.en.md](docs/STREAMING.en.md) | [docs/STREAMING.md](docs/STREAMING.md) |
+| Balance design notes | [docs/DESIGN-BALANCE.en.md](docs/DESIGN-BALANCE.en.md) | [docs/DESIGN-BALANCE.md](docs/DESIGN-BALANCE.md) |
+| Prior art and research | [docs/RESEARCH-SOTA.en.md](docs/RESEARCH-SOTA.en.md) | [docs/RESEARCH-SOTA.md](docs/RESEARCH-SOTA.md) |
+| Planned architecture | [docs/ARCHITECTURE-PLAN.en.md](docs/ARCHITECTURE-PLAN.en.md) | [docs/ARCHITECTURE-PLAN.md](docs/ARCHITECTURE-PLAN.md) |
 
 ## Status
 
-Verified on a real project (29 mixer tracks, FL 25.2.5): live per-track capture in both
+Verified on a real project (29 mixer tracks — that is the project's own count, read from FL;
+25.2.5): live per-track capture in both
 modes; the full tape; events up to 40 per second; masking, provenance, roles, save points;
 and a correlation proof that captured tracks are not copies of the master (GTR L1 ↔ GTR R1:
 0.046; the maximum pair, 0.614, is a bus and its source).

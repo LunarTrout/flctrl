@@ -40,7 +40,7 @@ EQ и панорамы заставят *наши* дорожки просумм
 
 | Сторона | Что есть | Что делаем |
 |---|---|---|
-| Наш проект | 29 дорожек микшера, доступна любая ручка | снимаем каждую дорожку вживую, измеряем, храним числа |
+| Наш проект | любое число дорожек микшера, доступна любая ручка | снимаем каждую дорожку вживую, измеряем, храним числа |
 | Референс | один стереофайл, стемов нет | измеряем тем же кодом, теми же полосами, той же сеткой времени |
 | Сравнение | источники разные | кладём оба в один куб (`время × дорожка/роль × полоса × метрика`) и вычитаем |
 
@@ -114,6 +114,10 @@ print(tape["lufs"], tape["lra"], tape["sii"], ev["count"])
 
 Две реализации с одинаковым выходом.
 
+Список дорожек читается из проекта в момент снимка (`mixer.getTrackCount()`): число
+дорожек нигде не зашито, работает любой размер проекта. Числа ниже — это размер
+тестового проекта, а не предел.
+
 **`files` (по умолчанию, рекомендуется).** Сохраняем проект по Ctrl+S и копируем `.flp`
 как точку восстановления, взводим дорожки, включаем запись, играем с `start`, читаем
 WAV-файлы, которые написала FL, считаем ленту, удаляем их, снимаем взвод, возвращаем
@@ -149,7 +153,7 @@ WAV-файлы, которые написала FL, считаем ленту, �
 `transients`, `mod_rate_hz`, `mod_depth`, `jitter_pct`, `technique`.
 На снимок: `masking`, `provenance`, `position`.
 
-Измеренные размеры: клетка ~1.0 КБ; дорожка за секунду 14.5 КБ; 29 дорожек × 10 с ≈ 4.1 МБ
+Измеренные размеры: клетка ~1.0 КБ; дорожка за секунду 14.5 КБ; 29 дорожек тестового проекта × 10 с ≈ 4.1 МБ
 (против 97.6 МБ сырого PCM).
 
 Полный справочник: [docs/TAPE.ru.md](docs/TAPE.ru.md) · [docs/TAPE.md](docs/TAPE.md)
@@ -233,12 +237,19 @@ tools/           раннер тестов и аудиты
 | Сведение по одному референсу | [docs/REFERENCE.ru.md](docs/REFERENCE.ru.md) | [docs/REFERENCE.md](docs/REFERENCE.md) |
 | Операции API | [docs/API.ru.md](docs/API.ru.md) | [docs/API.md](docs/API.md) |
 | Правила, добытые на живых проектах | [docs/RULES.md](docs/RULES.md) | [docs/RULES.en.md](docs/RULES.en.md) |
-| Спека (дизайн) | [docs/SPEC.md](docs/SPEC.md) | — |
-| Состояние | [docs/STATUS.md](docs/STATUS.md) | — |
+| Как устроена библиотека | [ARCHITECTURE.md](ARCHITECTURE.md) | [ARCHITECTURE.en.md](ARCHITECTURE.en.md) |
+| Спека (дизайн) | [docs/SPEC.md](docs/SPEC.md) | [docs/SPEC.en.md](docs/SPEC.en.md) |
+| Состояние: что проверено, а что нет | [docs/STATUS.md](docs/STATUS.md) | [docs/STATUS.en.md](docs/STATUS.en.md) |
+| План работ | [docs/ROADMAP.md](docs/ROADMAP.md) | [docs/ROADMAP.en.md](docs/ROADMAP.en.md) |
+| Поток метрик | [docs/STREAMING.md](docs/STREAMING.md) | [docs/STREAMING.en.md](docs/STREAMING.en.md) |
+| Заметки по балансу | [docs/DESIGN-BALANCE.md](docs/DESIGN-BALANCE.md) | [docs/DESIGN-BALANCE.en.md](docs/DESIGN-BALANCE.en.md) |
+| Аналоги и исследования | [docs/RESEARCH-SOTA.md](docs/RESEARCH-SOTA.md) | [docs/RESEARCH-SOTA.en.md](docs/RESEARCH-SOTA.en.md) |
+| Планируемая архитектура | [docs/ARCHITECTURE-PLAN.md](docs/ARCHITECTURE-PLAN.md) | [docs/ARCHITECTURE-PLAN.en.md](docs/ARCHITECTURE-PLAN.en.md) |
 
 ## Состояние
 
-Проверено на реальном проекте (29 дорожек, FL 25.2.5): живой поканальный захват в обоих
+Проверено на реальном проекте (29 дорожек — столько их было в проекте, число берётся из FL;
+25.2.5): живой поканальный захват в обоих
 режимах; полная лента; события до 40 в секунду; маскировка, провенанс, роли, точки
 сохранения; и доказательство корреляцией, что снятые дорожки — не копии мастера
 (GTR L1 ↔ GTR R1: 0.046; максимум 0.614 — это шина и её источник).

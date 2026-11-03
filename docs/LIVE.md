@@ -49,7 +49,9 @@ Properties:
 - disk is touched only for the duration of the take, then emptied;
 - FL is not restarted; the project is not reloaded;
 - armed state and mode are restored even on exceptions (`try/finally`);
-- verified: 29 tracks in one take, `Recorded` empty afterwards.
+- verified: every track of the test project (29 at the time) in one take, `Recorded` empty
+  afterwards; the list comes from `mixer.getTrackCount()`, so the count is whatever the
+  project has;
 
 Caveat: in song mode FL may insert an audio clip into the playlist for a recording
 ("auto-create audio clip"). This was never confirmed to be the cause of a reported loudness
@@ -76,7 +78,7 @@ the hook lives in a **separate long-running daemon** (`tools-local/hook_daemon.p
 
 - one attach per FL session;
 - commands `ping`, `start`, `stop`, `quit` over a length-prefixed JSON socket;
-- audio is transferred compressed (`zlib` + base64) because 29 tracks of raw JSON exceeded
+- audio is transferred compressed (`zlib` + base64) because the whole track list as raw JSON exceeded
   the timeout;
 - `ensure_daemon()` starts it on demand and re-attaches if FL's PID changed.
 
@@ -117,7 +119,7 @@ design, the presence of new files is checked once, and the bridge calls have tim
 
 Verified on FL 25.2.5 (build 5319):
 
-- 29 tracks captured in one take, one WAV per track, correct track names;
+- all 29 tracks of the test project captured in one take, one WAV per track, correct names;
 - captured tracks are not copies of the master (pairwise correlation: GTR L1 ↔ GTR R1
   0.046; maximum 0.614 for DRUM BUS ↔ DRUMS SD3);
 - `Recorded` empty after capture; FL alive; project unchanged except restored armed state;
