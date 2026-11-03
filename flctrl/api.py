@@ -581,6 +581,40 @@ def call(op: str, args: dict | None = None, fl=None) -> dict:
         raise ApiError("not_available", op,
                        error="запись дорожек появится с tap (см. SPEC §9)")
 
+    if op == "pan.plan":
+        import panplan
+        stems = a.get("stems") or {}
+        if not stems:
+            raise ApiError("bad_args", op, need=["stems"])
+        return panplan.plan(stems, a.get("a"), a.get("b"),
+                            section_s=float(a.get("section_s", 8.0)),
+                            max_step=float(a.get("max_step", 0.15)),
+                            max_pan=float(a.get("max_pan", 0.7)))
+
+    if op == "pan.check":
+        import panplan
+        return panplan.check(a.get("plan") or {}, a.get("section_s"))
+
+    if op == "pan.move":
+        import realtime, fl_lib
+        track = a.get("track")
+        points = a.get("points")
+        if track is None or not points:
+            raise ApiError("bad_args", op, need=["track", "points"])
+        secs = float(a.get("seconds", 8.0))
+        if DRY_RUN:
+            return {"dry_run": True, "track": int(track), "points": points,
+                    "seconds": secs}
+        res = realtime.move_pan(fl_lib, int(track), [tuple(p) for p in points],
+                                duration_s=secs, rate_hz=float(a.get("rate_hz", 20.0)))
+        mover = res["mover"]
+        # Mover работает в своём потоке: ждём его, иначе вернём пустую статистику
+        th = getattr(mover, "_thread", None)
+        if th is not None:
+            th.join(secs + 2.0)
+        return {"track": int(track), "stats": dict(mover.stats),
+                "pan_after": _safe_before("/track/%d/pan" % int(track), fl_lib)}
+
     if op == "clip.at":
         pr = _project()
         sec = a.get("seconds")
