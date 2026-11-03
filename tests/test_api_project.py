@@ -47,6 +47,18 @@ def main() -> int:
     none = api.call("clip.at", {"seconds": 3.0})
     check("ранний момент тоже отвечает", isinstance(none.get("active"), list), "")
 
+    wav = r"C:/Users/epicc/tools/fltest/fixtures/demo2.wav"
+    if os.path.exists(wav):
+        f = api.measure({"metric": "bands", "source": wav, "a": 0, "b": 40,
+                         "by": "section", "sections_from": "markers"})
+        check("секции по маркерам", len(f["axes"]["section"]) >= 2,
+              str(f["axes"]["section"]))
+
+    cov = api.help("coverage")
+    check("покрытие перечисляет метрики", len(cov["rows"]) >= 10, str(len(cov["rows"])))
+    check("покрытие знает пропуски", isinstance(cov["missing"], list), str(cov["missing"][:3]))
+    check("покрытие видит измеренное", "bands" in cov["measured"], str(cov["measured"][:4]))
+
     print("\nитог: %d прошло, %d упало" % (len(passed), len(failed)))
     return 1 if failed else 0
 

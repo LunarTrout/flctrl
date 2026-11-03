@@ -666,6 +666,28 @@ def measure(spec: dict) -> dict:
         dur = sf.info(sources[0]).duration
         a0 = float(a or 0.0)
         b0 = float(b or dur)
+
+        bounds = None
+        if spec.get("sections_from") == "markers":
+            try:
+                pr = _project()
+                marks = sorted({pr.seconds_at(m.get("pos", 0)) if isinstance(m, dict) else 0.0
+                                for m in (pr.markers or [])})
+                marks = [m for m in marks if a0 - 1e-6 <= m <= b0 + 1e-6]
+                if len(marks) >= 2:
+                    bounds = marks + [b0]
+            except Exception:
+                bounds = None
+        if bounds:
+            rows, labels = [], []
+            for i in range(len(bounds) - 1):
+                t, e = bounds[i], bounds[i + 1]
+                m = audit.measure(sources[0], t, e)
+                rows.append([round(float(v), 2) for v in m["bands_rel"]])
+                labels.append("%.1f–%.1f с" % (t, e))
+            return _finish(frames.make_frame("bands", {"section": labels, "band": regions},
+                                             rows, unit="дБ (относительно среднего)"),
+                           metric, spec)
         step = float(spec.get("section_s", 8.0))
         rows, labels = [], []
         t = a0
@@ -865,6 +887,9 @@ OPS_HELP = {
     "track.delete": "{index} — удалить дорожку",
     "plan.apply": "{edits, track_map, slot?} — применить план правок",
     "eq.set": "{track, slot, gains} — полосы эквалайзера",
+    "clip.at": "{seconds|bar} — что звучит в этот момент (локальное время источников)",
+    "inverse.solve": "{stems, against, cap_db} — обратная задача: гейны под цели микса",
+    "use_project": "не операция: api.use_project(path) — разобрать .flp",
     "system.health": "{} — жив ли мост",
     "system.doctor": "{} — пробы API",
 }
@@ -877,6 +902,29 @@ PATHS_HELP = [
     "/track/{i}/send/{d}", "/channel/{i}", "/playlist/clip/{id}",
     "/section", "/refs/{name}", "/measure/{id}",
 ]
+
+
+def coverage() -> dict:
+    """Что измерено, а что нет — защита от «забыл посмотреть».
+
+    Смотрит на кадры в хранилище: по каждой метрике из реестра говорит,
+    есть ли замер, сколько кадров и какие метрики вообще не трогались.
+    """
+    import frames
+    have: dict = {}
+    for fid, fr in STORE.items():
+        m = fr.get("metric")
+        have.setdefault(m, []).append(fid)
+    rows = []
+    for name, info in sorted(frames.METRICS.items()):
+        got = have.get(name, [])
+        rows.append({"metric": name, "unit": info["unit"],
+                     "axes": list(info["axes"]), "frames": got,
+                     "measured": bool(got)})
+    missing = [r["metric"] for r in rows if not r["measured"]]
+    return {"rows": rows, "measured": [r["metric"] for r in rows if r["measured"]],
+            "missing": missing,
+            "share": round(len(missing) and (len(rows) - len(missing)) / len(rows) or 0, 3)}
 
 
 def help(what: str | None = None) -> dict:
@@ -899,6 +947,8 @@ def help(what: str | None = None) -> dict:
         return {"ops": OPS_HELP}
     if what == "metrics":
         return {"metrics": {k: v["unit"] for k, v in frames.METRICS.items()}}
+    if what == "coverage":
+        return coverage()
     raise ApiError("unknown_help", what, known=["paths", "ops", "metrics"])
 
 
