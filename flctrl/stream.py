@@ -20,6 +20,11 @@ import time
 
 import frida
 
+try:
+    from . import incr
+except ImportError:          # запуск как отдельного модуля (sys.path = flctrl)
+    import incr
+
 JS = r"""
 'use strict';
 rpc.exports.meta = function () {
@@ -163,6 +168,7 @@ class Stream:
         self.fs = 44100
         self.tracks = [t for t in (tracks or range(self.count)) if t < self.count]
         self.ring_seconds = ring_seconds
+        self.meters: dict[int, dict] = {}
         self.ring: list[dict] = []
         self._inbox: list[tuple[int, bytes, int]] = []
         self.script.on('message', self._on_message)
@@ -222,23 +228,26 @@ class Stream:
             while self.ring and t_now - self.ring[0]["t"] > self.ring_seconds:
                 self.ring.pop(0)
 
-            row = {"t": round(t_now, 3), "beat": None, "tracks": {}}
+            row = {"t": round(t_now, 3), "tracks": {}}
             for t, raw in got.items():
                 if not raw or len(raw) % 8:
                     continue
-                mono = np.frombuffer(raw, dtype="<f4").reshape(-1, 2).mean(axis=1)
-                if mono.size == 0:
+                frame = np.frombuffer(raw, dtype="<f4").reshape(-1, 2)
+                if frame.size == 0:
                     continue
-                rms = float(np.sqrt((mono ** 2).mean()))
-                peak = float(np.abs(mono).max())
-                spec = np.abs(np.fft.rfft(mono)) ** 2
-                freqs = np.fft.rfftfreq(mono.size, 1.0 / self.fs)
-                bands = {}
-                for lo, hi in BANDS:
-                    mask = (freqs >= lo) & (freqs < hi)
-                    bands[lo] = round(float(10 * np.log10(spec[mask].sum() + 1e-12)), 2)
-                row["tracks"][t] = {"rms": round(rms, 5), "peak": round(peak, 4),
-                                    "bands": bands}
+                m = self.meters.setdefault(t, {
+                    "rms": incr.RmsMeter(self.fs),
+                    "band": incr.BandMeter(self.fs),
+                    "stereo": incr.StereoMeter(),
+                })
+                m["rms"].feed(frame)
+                m["band"].feed(frame)
+                m["stereo"].feed(frame)
+                r = m["rms"].value()
+                b = m["band"].value()
+                row["tracks"][t] = {"rms": round(r["rms"], 5),
+                                    "peak": round(r["peak"], 4),
+                                    "bands": b["bands"]}
             if self.exact_tracks:
                 ex = self.script.exports_sync.exact_read()
                 for t, d in (ex.get("data") or {}).items():
