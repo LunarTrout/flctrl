@@ -53,6 +53,7 @@ def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
     import roles as roles_mod
 
     groups: dict = {}
+    snr_raw: dict = {}          # кто в полосе главный — нужно для компенсаций
     skipped = []
     for name, row in (attr.get("stems") or {}).items():
         sections = row.get("sections")
@@ -75,6 +76,11 @@ def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
                 goal = (targets or {}).get(role, {}).get(region, target_snr_db)
                 snr = (sec.get("snr") or {}).get(region)
                 if snr is not None:
+                    snr_raw.setdefault((name, region), {"snr": [], "content": [],
+                                                        "role": role})
+                    snr_raw[(name, region)]["snr"].append(float(snr))
+                    snr_raw[(name, region)]["content"].append(content)
+                if snr is not None:
                     deficit_db = goal - float(snr)
                     if abs(deficit_db) < min_deficit_db - 1e-9:
                         continue
@@ -88,6 +94,11 @@ def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
                      "role": role})
 
     edits = []
+    snr_index: dict = {}
+    for (name, region), acc in snr_raw.items():
+        snr_index[(name, region)] = (
+            round(float(statistics.median(acc["snr"])), 1),
+            float(statistics.median(acc["content"])), acc["role"])
     for (name, region), rows in groups.items():
         a_med = float(statistics.median(r["audib"] for r in rows))
         content = float(statistics.median(r["content"] for r in rows))
@@ -100,6 +111,7 @@ def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
             audib = None
             snr_med = round(float(statistics.median(
                 [r["snr"] for r in rows if r["snr"] is not None])), 1)
+            snr_index.setdefault((name, region), (snr_med, content, role))
         else:
             raw = need_db(a_med, target)
             deficit_db = raw
@@ -137,12 +149,57 @@ def plan(attr: dict, target: float = 0.6, cap_db: float = 3.0,
     chosen = edits[:max_edits]
     # контроль усиления: правки не должны просто «поднять всё».
     # Оценка — по доле энергии полосы: подъём в плотной полосе весит больше.
-    net_db = sum(e["do_db"] * max(e["content"], 0.0) for e in chosen)
-    boosts = [e for e in chosen if e["do_db"] > 0]
-    cuts = [e for e in chosen if e["do_db"] < 0]
-    return {"edits": chosen, "skipped": skipped,
+    def net_of(items) -> float:
+        return sum(e["do_db"] * max(e["content"], 0.0) for e in items)
+
+    net_db = net_of(chosen)
+    compensations = []
+    # если план в сумме разгоняет микс, срезаем у того, кто в этой полосе
+    # главный: поднимать пятерых вместо того, чтобы убрать одного — плохая идея
+    for _guard in range(6):
+        if net_db <= 2.0:
+            break
+        done_regions = {c["region"] for c in compensations}
+        pos = [e for e in chosen + compensations
+               if e["do_db"] > 0 and e["region"] not in done_regions]
+        if not pos:
+            break
+        target_edit = max(pos, key=lambda e: e["do_db"] * max(e["content"], 0.0))
+        region = target_edit["region"]
+        # срезаем только того, у кого есть запас: если он и так ниже своей
+        # цели, срез сделает хуже, а не лучше
+        cands = []
+        for (name, r), (snr, content, role) in snr_index.items():
+            if r != region or name == target_edit["stem"]:
+                continue
+            own_goal = (targets or {}).get(role, {}).get(region, target_snr_db)
+            if snr > own_goal + 0.5:
+                cands.append((snr, name, content, role))
+        if not cands:
+            continue
+        snr_max, name, content, role = max(cands)
+        if any(c["stem"] == name and c["region"] == region for c in compensations):
+            continue
+        amount = -round(min(cap_db, net_db / 2.0), 1)
+        comp = {"stem": name, "role": role,
+                "region": region, "region_label": REGION_LABELS.get(region, region),
+                "basis": "snr", "goal_db": None, "audib": None,
+                "snr_db": snr_max, "deficit": round(amount, 3),
+                "need_db": round(amount, 2), "do_db": amount, "capped": True,
+                "sections": target_edit["sections"],
+                "span": target_edit["span"], "n_sections": target_edit["n_sections"],
+                "content": round(content, 3), "impact": round(abs(amount) * content, 4),
+                "kind": "compensation",
+                "why": "компенсация: «%s» здесь главный (%+.1f дБ), срез вместо "
+                       "подъёма остальных" % (REGION_LABELS.get(region, region), snr_max)}
+        compensations.append(comp)
+        net_db = net_of(chosen + compensations)
+
+    boosts = [e for e in chosen + compensations if e["do_db"] > 0]
+    cuts = [e for e in chosen + compensations if e["do_db"] < 0]
+    return {"edits": chosen, "compensations": compensations, "skipped": skipped,
             "target": target, "cap_db": cap_db, "target_snr_db": target_snr_db,
-            "count": len(chosen), "found": total,
+            "count": len(chosen) + len(compensations), "found": total,
             "gain_staging": {
                 "net_db": round(net_db, 2),
                 "boosts": len(boosts), "cuts": len(cuts),

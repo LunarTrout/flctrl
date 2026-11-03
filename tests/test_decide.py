@@ -97,15 +97,26 @@ def main() -> int:
 
     # контроль усиления: только подъёмы → предупреждение; подъём со срезом → нет
     only_up = decide.plan({
-        "stems": {"a": {"share_pct": 20.0, "sections": [
-            {"t": 0, "active": True, "share": {"mid": 0.8}, "regions": {"mid": 0.1},
-             "snr": {"mid": -6.0}}]}},
-    }, cap_db=3.0, min_deficit_db=1.0, min_share_pct=0.1,
-        targets={"other": {"mid": 0.0}}, roles_map={"a": "other"})
-    check("только подъёмы — предупреждение",
-          only_up["gain_staging"]["warn"] is True
-          and only_up["gain_staging"]["boosts"] >= 1,
-          "%+.2f дБ" % only_up["gain_staging"]["net_db"])
+        "stems": {
+            "a": {"share_pct": 20.0, "sections": [
+                {"t": 0, "active": True, "share": {"mid": 0.95}, "regions": {"mid": 0.05},
+                 "snr": {"mid": -6.0}}]},
+            "b": {"share_pct": 60.0, "sections": [
+                {"t": 0, "active": True, "share": {"mid": 0.9}, "regions": {"mid": 0.90},
+                 "snr": {"mid": +6.0}}]},
+        },
+    }, cap_db=3.0, min_deficit_db=1.0, min_share_pct=0.1, max_edits=1,
+        targets={"other": {"mid": 0.0}}, roles_map={"a": "other", "b": "other"})
+    check("компенсация гасит разгон",
+          only_up["gain_staging"]["net_db"] <= 2.0
+          or only_up["gain_staging"]["warn"] is False,
+          "%+.2f дБ, компенсаций %d" % (only_up["gain_staging"]["net_db"],
+                                        len(only_up["compensations"])))
+    check("срез добавлен главному в полосе",
+          bool(only_up["compensations"])
+          and only_up["compensations"][0]["kind"] == "compensation"
+          and only_up["compensations"][0]["do_db"] < 0,
+          str([(c["stem"], c["region"], c["do_db"]) for c in only_up["compensations"]]))
 
     balanced = decide.plan({
         "stems": {
