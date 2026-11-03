@@ -317,6 +317,49 @@ def fl_simulate(mix_path: str, stems: dict, targets_path: str | None = None,
 
 
 @tool
+def fl_list(path: str = "/", depth: int = 1) -> list:
+    """Что лежит по этому пути: дочерние узлы с типом и значением."""
+    import api
+    return api.list_node(path, depth)
+
+
+@tool
+def fl_get(path: str):
+    """Значение по пути: '/track/12/volume', '/transport', '/track/*/pan'."""
+    import api
+    return api.get(path)
+
+
+@tool
+def fl_set(paths: list | dict) -> dict:
+    """Записать значения по путям. Одна пачка — атомарно, с откатом при ошибке."""
+    import api
+    items = paths if isinstance(paths, list) else [paths]
+    return api.set_many(items)
+
+
+@tool
+def fl_call(op: str, args: dict | None = None) -> dict:
+    """Действие: plugin.insert/delete/replace, transport.play/stop, save, track.add."""
+    import api
+    return api.call(op, args)
+
+
+@tool
+def fl_measure(spec: dict) -> dict:
+    """Картина по файлам: {"metric":"bands","source":path,"a":..,"b":..} → кадр."""
+    import api
+    return api.measure(spec)
+
+
+@tool
+def fl_compare(a: dict, b: dict, top: int | None = None) -> dict:
+    """Сравнить два кадра: дельты по осям, отсортированные по модулю."""
+    import api
+    return api.compare(a, b, top)
+
+
+@tool
 def fl_context(with_params: bool = False, with_routing: bool = True,
                with_levels: bool = False, level_seconds: float = 2.0) -> dict:
     """Полный снимок проекта: дорожки, каналы, слоты, плагины, роутинг, темп.
