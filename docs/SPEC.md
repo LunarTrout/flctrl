@@ -155,6 +155,27 @@ compare(a, b)         дельты по осям
 `masking`, `sii`, `transient`, `harmony`, `stereo`, `wall`, `sections`, `lufs`.
 Метрика — строка реестра (оси, единицы, источник), а не инструмент.
 
+### 10.1. Контракт: что чем выражается
+
+| группа | пути / операции |
+|---|---|
+| состояние | `list("/")`, `get("/project")`, `get("/track/*")`, `get("/track/{i}/slot")`, `get("/channel/*")`, `get("/playlist/clip/*")`, `get("/transport")` |
+| значения | `set("/track/{i}/volume|pan|mute|solo")`, `set("/track/{i}/slot/{s}/param/{p}")`, `set("/track/{i}/slot/{s}/band/{b}", {hz,gain,q})`, `set("/track/{i}/send/{d}", {active,level})` |
+| действия | `call("plugin.insert|delete|replace")`, `call("track.add|delete")`, `call("save")`, `call("render")`, `call("transport.play|stop")` |
+| запись | `call("record.start", {tracks, path})`, `call("record.stop")`; читается как `get("/record/{id}")` |
+| слух | `measure({metric, by, where, source})`, `compare(a, b)` |
+| референсы | `get("/refs")`, `measure({..., source:"/refs/GRIMA"})` |
+| решения | `call("plan.build", {diff})`, `call("plan.apply", {plan})`, `call("verify", {change})` |
+| система | `call("system.health|doctor|reset")`, `call("lease.take|release")` |
+
+Правило: ни одна операция не задаёт порядок работы. `set` работает без
+`measure`, `compare` — без `plan`, `measure` — без `set`.
+
+Замещение старых имён (77 инструментов) — механическое: `fl_tracks` →
+`get("/track/*")`, `fl_set_volume` → `set("/track/N/volume")`, `fl_wall` →
+`measure({metric:"wall"})`, `fl_apply_plan` → `call("plan.apply")`. Пока новые
+не покрыли всё, старые остаются обёртками.
+
 ## 11. Чего не хватает (сжато)
 
 Полный реестр — §3 в `docs/archive/specs-03-11/SPEC-CONTEXT.md`. Главное:
