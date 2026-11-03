@@ -361,6 +361,29 @@ def call(op: str, args: dict | None = None, fl=None) -> dict:
             raise ApiError("bad_args", op, need=["track", "slot", "gains"])
         return fl.apply.eq(int(a["track"]), int(a["slot"]), a["gains"])
 
+    if op == "inverse.solve":
+        import invmix
+        stems = a.get("stems") or {}
+        against = a.get("against") or []
+        if not stems or not against:
+            raise ApiError("bad_args", op, need=["stems", "against"])
+        if isinstance(against, str):
+            against = [against]
+        a0, b0 = a.get("a"), a.get("b")
+        target = _avg_metrics([_metrics_of(p, a0, b0) for p in against])
+        loaded, fs = {}, None
+        for role, path in stems.items():
+            x, fs_i = invmix.load(path, a.get("max_seconds"))
+            if fs is None:
+                fs = fs_i
+            loaded[role] = x
+        loaded = invmix.align(*loaded.values())
+        res = invmix.solve(dict(zip(stems, loaded)), fs, target,
+                           cap_db=float(a.get("cap_db", 6.0)),
+                           step_db=float(a.get("step_db", 0.5)))
+        res["target_refs"] = [_label(p) for p in against]
+        return res
+
     if op == "record.start" or op == "record.stop":
         raise ApiError("not_available", op,
                        error="запись дорожек появится с tap (см. SPEC §9)")
@@ -392,7 +415,8 @@ def measure(spec: dict) -> dict:
         raise ApiError("not_available", error="живой источник не подключён (tap в работе)")
     if spec.get("metric") in ("sii", "partial"):
         sources = []          # этим метрикам файл-источник не нужен
-    if not sources and spec.get("metric") not in ("sii", "partial"):
+    if (not sources and spec.get("metric") not in ("sii", "partial")
+            and spec.get("by") != "role"):
         if not source:
             raise ApiError("bad_spec", error="нужен source или sources")
         sources = [source]
@@ -403,7 +427,7 @@ def measure(spec: dict) -> dict:
     import audit
     import perceptual as P
 
-    if metric in ("bands", "rms", "peak", "crest", "lufs"):
+    if metric in ("bands", "rms", "peak", "crest", "lufs") and not spec.get("by"):
         rows = []
         regions = [int(round(f)) for f in P.FC]
         for path in sources:
@@ -427,6 +451,41 @@ def measure(spec: dict) -> dict:
                                          axes, values,
                                          coverage={"measured": [_label(p) for p in sources]},
                                          unit=unit), metric, spec)
+
+    regions = [int(round(f)) for f in P.FC]
+    by = spec.get("by")
+    if by == "section":
+        if not sources:
+            raise ApiError("bad_spec", error="by=section требует source")
+        import soundfile as sf
+        dur = sf.info(sources[0]).duration
+        a0 = float(a or 0.0)
+        b0 = float(b or dur)
+        step = float(spec.get("section_s", 8.0))
+        rows, labels = [], []
+        t = a0
+        while t < b0 - 1e-6:
+            e = min(t + step, b0)
+            m = audit.measure(sources[0], t, e)
+            rows.append([round(float(v), 2) for v in m["bands_rel"]])
+            labels.append("%.0f–%.0f с" % (t, e))
+            t = e
+        return _finish(frames.make_frame("bands", {"section": labels, "band": regions},
+                                         rows, unit="дБ (относительно среднего)"),
+                       metric, spec)
+
+    if by == "role":
+        stems = spec.get("stems") or {}
+        if not stems:
+            raise ApiError("bad_spec", error="by=role требует stems {роль: путь}")
+        roles = list(stems)
+        rows = []
+        for role in roles:
+            m = audit.measure(stems[role], a, b)
+            rows.append([round(float(v), 2) for v in m["bands_rel"]])
+        return _finish(frames.make_frame("bands", {"role": roles, "band": regions},
+                                         rows, unit="дБ (относительно среднего)"),
+                       metric, spec)
 
     if metric == "transients":
         import transients
@@ -524,6 +583,38 @@ def compare(a, b, top: int | None = None) -> dict:
         cor = frames.corridor(b)
         return frames.compare_corridor(a, cor, top=top)
     return frames.compare(a, b, top=top)
+
+
+def _metrics_of(path: str, a=None, b=None) -> dict:
+    import invmix
+    x, fs = invmix.load(path)
+    import soundfile as sf
+    info = sf.info(path)
+    start = int((a or 0.0) * info.samplerate)
+    frames = int(((b or info.duration) - (a or 0.0)) * info.samplerate)
+    x = x[max(0, start):start + max(1, frames)]
+    if x.ndim == 1:
+        x = x[:, None]
+    return invmix.metrics(x, fs)
+
+
+def _avg_metrics(items: list) -> dict:
+    """Средняя цель по нескольким референсам — покомпонентно, без хитростей."""
+    out = {}
+    bands = [m.get("bands_db") for m in items if m.get("bands_db")]
+    if bands:
+        n = min(len(b) for b in bands)
+        out["bands_db"] = [sum(b[i] for b in bands) / len(bands) for i in range(n)]
+    regs = {}
+    for m in items:
+        for k, v in (m.get("regions_pct") or {}).items():
+            regs.setdefault(k, []).append(v)
+    out["regions_pct"] = {k: sum(v) / len(v) for k, v in regs.items()}
+    for key in ("sharp", "crest", "corr"):
+        vals = [m[key] for m in items if m.get(key) is not None]
+        if vals:
+            out[key] = sum(vals) / len(vals)
+    return out
 
 
 def _label(path: str, index: int | None = None) -> str:
