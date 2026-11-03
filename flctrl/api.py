@@ -373,7 +373,9 @@ def measure(spec: dict) -> dict:
     source = spec.get("source")
     if source == "live" or (isinstance(sources, list) and sources and sources[0] == "live"):
         raise ApiError("not_available", error="живой источник не подключён (tap в работе)")
-    if not sources:
+    if spec.get("metric") in ("sii", "partial"):
+        sources = []          # этим метрикам файл-источник не нужен
+    if not sources and spec.get("metric") not in ("sii", "partial"):
         if not source:
             raise ApiError("bad_spec", error="нужен source или sources")
         sources = [source]
@@ -408,7 +410,70 @@ def measure(spec: dict) -> dict:
                                  coverage={"measured": [_label(p) for p in sources]},
                                  unit=unit)
 
-    raise ApiError("unknown_metric", metric, known=["bands", "rms", "peak", "crest", "lufs"])
+    if metric == "transients":
+        import transients
+        names = ["low", "mid", "high"]
+        rows = []
+        for path in sources:
+            a_ = transients.analyse(path, max_seconds=float(spec.get("seconds", 45.0)))
+            if not a_.get("ok"):
+                raise ApiError("measure_failed", error=a_.get("error"))
+            rows.append([(a_["bands"].get(n) or {}).get("ts_db") for n in names])
+        return frames.make_frame("transient", {"source": [_label(p) for p in sources],
+                                               "band": names}, rows,
+                                 unit="дБ (удар/хвост)")
+
+    if metric == "harmony":
+        import harmony
+        names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        rows = []
+        for path in sources:
+            a_ = harmony.analyse(path, a, b)
+            if not a_.get("ok"):
+                raise ApiError("measure_failed", error=a_.get("error"))
+            rows.append([round(float(x), 4) for x in a_["chroma"]])
+        return frames.make_frame("harmony", {"source": [_label(p) for p in sources],
+                                             "pitch": names}, rows, unit="доли")
+
+    if metric == "wall":
+        import wall
+        rows, centers = [], None
+        for path in sources:
+            w = wall.analyze(path, a, b)
+            centers = [b_["fc"] for b_ in w["bands"]]
+            rows.append([round(float(x["median_db"]), 2) for x in w["bands"]])
+        return frames.make_frame("wall", {"source": [_label(p) for p in sources],
+                                          "band": centers}, rows,
+                                 unit="дБ (медиана полосы)")
+
+    if metric == "sii":
+        import speech
+        vocal, masker = spec.get("vocal"), spec.get("masker")
+        if not vocal or not masker:
+            raise ApiError("bad_spec", error="sii требует vocal и masker")
+        r = speech.intelligibility(vocal, masker)
+        bands = r["bands"]
+        return frames.make_frame("sii", {"band": [b["f"] for b in bands]},
+                                 [round(float(b["audibility"]), 4) for b in bands],
+                                 unit="0..1", coverage={"measured": ["vocal", "masker"]})
+
+    if metric == "partial":
+        import partial
+        stems = spec.get("stems") or {}
+        mix = spec.get("mix")
+        if not stems or not mix:
+            raise ApiError("bad_spec", error="partial требует stems и mix")
+        r = partial.attribute(mix, stems, a, b)
+        roles = sorted(r["roles"])
+        regions = list(next(iter(r["roles"].values()))["regions"])
+        values = [[round(float(r["roles"][role]["regions"][reg]), 2) for reg in regions]
+                  for role in roles]
+        return frames.make_frame("partial", {"source": roles, "band": regions}, values,
+                                 unit="дБ (частичная громкость)")
+
+    raise ApiError("unknown_metric", metric,
+                   known=["bands", "rms", "peak", "crest", "lufs", "transients",
+                          "harmony", "wall", "sii", "partial"])
 
 
 def compare(a: dict, b: dict, top: int | None = None) -> dict:

@@ -51,6 +51,19 @@ def main() -> int:
     check("одномерный кадр (LUFS)", "source" in g["axes"] and isinstance(g["values"][0], float),
           str(g["values"]))
 
+    tr = api.measure({"metric": "transients", "source": WAV, "seconds": 15})
+    check("транзиенты: источник × полоса", list(tr["axes"]) == ["source", "band"]
+          and len(tr["values"][0]) == 3, str(tr["values"][0]))
+
+    hm = api.measure({"metric": "harmony", "source": WAV, "a": 10, "b": 20})
+    check("гармония: 12 ступеней", len(hm["values"][0]) == 12, str(len(hm["values"][0])))
+    l2 = sum(x * x for x in hm["values"][0]) ** 0.5
+    check("гармония нормирована (L2)", abs(l2 - 1.0) < 0.05, "норма %.3f" % l2)
+
+    wl = api.measure({"metric": "wall", "source": WAV, "a": 10, "b": 20})
+    check("стена: полосы с центрами", all(isinstance(x, (int, float)) for x in wl["axes"]["band"]),
+          str(wl["axes"]["band"]))
+
     try:
         api.measure({"metric": "bands", "source": "live"})
         check("живой источник честно отказывает", False, "приняло live")
