@@ -163,6 +163,15 @@ def main(argv=None) -> int:
               "actions": res["actions"],
               "skipped": res["coverage"]["skipped"]})
         return 0
+    if cmd == "sii":
+        import speech
+
+        vocal = args[args.index("--vocal") + 1] if "--vocal" in args else args[0]
+        masker = args[args.index("--masker") + 1] if "--masker" in args else args[1]
+        res = speech.intelligibility(vocal, masker)
+        res["grade"] = speech._grade(res["sii"])
+        _out(res)
+        return 0
     if cmd == "describe":
         import fl_lib as fl
         _out(fl.hear.describe(args[0]))

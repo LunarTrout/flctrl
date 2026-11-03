@@ -1,0 +1,31 @@
+{
+ "refs": [
+  {
+   "track": "finntroll_Jaktens Tid.mp3",
+   "sii": 0.0646
+  },
+  {
+   "track": "grima2_Grima - Will of the Primordial Fu",
+   "sii": 0.3202
+  },
+  {
+   "track": "grima_GRIMA - Flight of the Silver Storm",
+   "sii": 0.1245
+  },
+  {
+   "track": "windir2_Windir - 1184 [FULL ALBUM].mp3",
+   "sii": 0.0148
+  },
+  {
+   "track": "windir_Windir - Arntor full album.mp3",
+   "sii": 0.2619
+  },
+  {
+   "track": "wintersun_Wintersun - Wintersun⧸02 - Win",
+   "sii": 0.1214
+  }
+ ],
+ "median": 0.1245,
+ "min": 0.0148,
+ "max": 0.3202
+}

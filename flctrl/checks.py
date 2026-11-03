@@ -64,6 +64,13 @@ def _effects_duck(ctx: dict) -> dict:
     return effects.ducking(x, fs)
 
 
+def _speech(ctx: dict) -> dict:
+    import speech
+    return speech.intelligibility(ctx["vocal"], ctx["masker"],
+                                  master_path=ctx.get("mine"),
+                                  baseline=ctx.get("sii_baseline"))
+
+
 REGISTRY: list[Check] = [
     Check("fronts", "Фронты против коридора референсов", ("mix", "refs"),
           _fronts, "микс"),
@@ -77,6 +84,9 @@ REGISTRY: list[Check] = [
           _sections, "микс"),
     Check("roles", "Слышимость ролей (partial loudness)", ("stems",),
           _roles, "роли"),
+    Check("speech", "Разборчивость вокала (SII, ANSI S3.5)",
+          ("vocal", "masker"), _speech, "роли",
+          "нужен вокал отдельно и остальной микс как маскер"),
     Check("pan", "Панорама: статичность и перекрытие ролей", ("stems",),
           _pan, "стерео"),
     Check("effects_ir", "Реверб/дилей: RT60, EDT, C50", ("impulse",),

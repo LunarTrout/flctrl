@@ -558,6 +558,10 @@ class _Hear:
         finally:
             os.unlink(path)
 
+    def sii(self, vocal: str, masker: str) -> dict:
+        """Разборчивость вокала против остального микса (SII, ANSI S3.5)."""
+        return _hear_cli("sii", "--vocal", vocal, "--masker", masker, timeout=1800)
+
     def pan(self, stems: dict, a: float | None = None, b: float | None = None) -> dict:
         """Карта панорамы по полосам/секциям и подсказки на измерениях."""
         import json as _json
@@ -577,12 +581,14 @@ class _Hear:
     def report(self, mine: str, refs: list[str] | None = None,
                stems: dict | None = None, a: float | None = None,
                b: float | None = None, impulse: str | None = None,
-               sine: str | None = None, ducked: str | None = None) -> dict:
+               sine: str | None = None, ducked: str | None = None,
+               vocal: str | None = None, masker: str | None = None) -> dict:
         """Полный отчёт одним вызовом: покрытие проверок, действия, markdown."""
         import json as _json
         import tempfile
         payload = {"refs": refs, "stems": stems, "a": a, "b": b,
-                   "impulse": impulse, "sine": sine, "ducked": ducked}
+                   "impulse": impulse, "sine": sine, "ducked": ducked,
+                   "vocal": vocal, "masker": masker}
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
                                          encoding="utf-8") as f:
             _json.dump(payload, f, ensure_ascii=False)

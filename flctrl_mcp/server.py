@@ -410,6 +410,17 @@ def fl_report(mine: str, refs: list[str] | None = None,
 
 
 @tool
+def fl_sii(vocal: str, masker: str) -> dict:
+    """Разборчивость вокала в миксе по ANSI S3.5 (SII 0..1).
+
+    vocal — вокал отдельным файлом, masker — остальной микс (всё, что его
+    маскирует). Возвращает SII, оценку словами, слышимость по 18 полосам
+    160…8000 Гц и самую забитую полосу.
+    """
+    return fl.hear.sii(vocal, masker)
+
+
+@tool
 def fl_attribute(mix_path: str, stems: dict, a: float | None = None,
                  b: float | None = None) -> dict:
     """Сколько каждого инструмента реально СЛЫШНО в миксе (ISO 532-2).

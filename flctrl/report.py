@@ -58,6 +58,11 @@ def _derive_actions(res: dict) -> list[str]:
     for tip in pan_res.get("advice", []):
         actions.append("панорама %s: %s (%s)" % (tip["stem"], tip["action"], tip["why"]))
 
+    sp = res.get("speech") or {}
+    if sp.get("sii") is not None:
+        actions.append("разборчивость вокала SII %.2f — %s; хуже всего %d Гц" % (
+            sp["sii"], sp.get("grade") or "", sp.get("worst_band") or 0))
+
     ef = res.get("effects_ir") or {}
     if ef.get("rt60"):
         actions.append("реверб: RT60 %.2f с, EDT %.2f с, C50 %.1f дБ — сверить "
@@ -72,9 +77,12 @@ def _derive_actions(res: dict) -> list[str]:
 def build(mine: str, refs: list[str] | None = None, a: float | None = None,
           b: float | None = None, stems: dict | None = None,
           impulse: str | None = None, sine: str | None = None,
-          ducked: str | None = None) -> dict:
+          ducked: str | None = None, vocal: str | None = None,
+          masker: str | None = None,
+          sii_baseline: list[float] | None = None) -> dict:
     ctx = {"mine": mine, "refs": refs, "a": a, "b": b, "stems": stems,
-           "impulse": impulse, "sine": sine, "ducked": ducked}
+           "impulse": impulse, "sine": sine, "ducked": ducked,
+           "vocal": vocal, "masker": masker, "sii_baseline": sii_baseline}
     cov = checks.run_all(ctx)
     res = cov["results"]
     return {"coverage": cov, "results": res, "actions": _derive_actions(res),
@@ -169,6 +177,21 @@ def to_markdown(rep: dict) -> str:
         for tip in pan_res["advice"]:
             lines.append("- %s: %s — %s" % (tip["stem"], tip["action"], tip["why"]))
 
+    sp = res.get("speech")
+    if sp:
+        lines.append("")
+        lines.append("## Разборчивость вокала (SII, ANSI S3.5)")
+        lines.append("")
+        lines.append("SII **%.3f** — %s. Хуже всего полоса %d Гц." % (
+            sp["sii"], sp.get("grade", ""), sp.get("worst_band", 0)))
+        lines.append("")
+        lines.append("| Гц | речь | маскер | маскирует | слышимость | важность |")
+        lines.append("|---|---|---|---|---|---|")
+        for b in sp["bands"]:
+            lines.append("| %d | %.1f | %.1f | %.1f | %.2f | %.4f |" % (
+                b["f"], b["speech"], b["masker"], b["masked"],
+                b["audibility"], b["importance"]))
+
     if cov["skipped"]:
         lines.append("")
         lines.append("## Не проверено (и почему)")
@@ -199,6 +222,10 @@ def main(argv=None) -> int:
     ap.add_argument("--impulse", default=None)
     ap.add_argument("--sine", default=None)
     ap.add_argument("--ducked", default=None)
+    ap.add_argument("--vocal", default=None)
+    ap.add_argument("--masker", default=None)
+    ap.add_argument("--sii-baseline", default=None,
+                    help="JSON с базовой линией SII референсов (sii_baseline.json)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args(argv)
 
@@ -207,8 +234,14 @@ def main(argv=None) -> int:
         name, _, path = item.partition("=")
         stems[name] = path
 
+    baseline = None
+    if a.sii_baseline and os.path.exists(a.sii_baseline):
+        import json as _json
+        data = _json.load(open(a.sii_baseline, encoding="utf-8"))
+        baseline = [r["sii"] for r in data.get("refs", [])] or None
+
     rep = build(a.mine, a.refs or None, a.a, a.b, stems or None,
-                a.impulse, a.sine, a.ducked)
+                a.impulse, a.sine, a.ducked, a.vocal, a.masker, baseline)
     md = to_markdown(rep)
     if a.out:
         with open(a.out, "w", encoding="utf-8") as f:
