@@ -142,6 +142,33 @@ def available() -> dict:
         return {"bridge": False, "error": str(exc)[:120]}
 
 
+# ------------------------------------------------------- окно записи FL (реестр)
+
+DSTITF = r"Software\Image-Line\FL Studio 25\DSTITF"
+
+
+def popup_state() -> int | None:
+    """PopupRec: 0 — FL показывает окно «Recording» при нажатии Record."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, DSTITF) as key:
+            return int(winreg.QueryValueEx(key, "PopupRec")[0])
+    except OSError:
+        return None
+
+
+def suppress_popup(enable: bool = True) -> dict:
+    """Убрать модальное окно «Recording» — без него автоматизация встаёт."""
+    import winreg
+    old = popup_state()
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, DSTITF, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "PopupRec", 0, winreg.REG_SZ, "1" if enable else "0")
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)[:160], "was": old}
+    return {"ok": True, "was": old, "now": popup_state()}
+
+
 # ------------------------------------------------------------------ демон хука
 
 def _daemon_send(payload: dict, timeout: float = 180.0) -> dict:
@@ -401,6 +428,8 @@ def capture_memory(tracks=None, seconds: float = 2.0, start: float | None = None
         armed_before = set()
 
     safety = backup()
+    if popup_state() == 0:
+        suppress_popup(True)          # иначе FL откроет модальное окно и всё встанет
     _daemon_send({"cmd": "start"}, timeout=10.0)
     error = None
     stats: dict = {}
@@ -573,6 +602,8 @@ def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
     except ValueError:
         armed_before = set()
     before = set(os.listdir(RECORDED)) if os.path.isdir(RECORDED) else set()
+    if popup_state() == 0:
+        suppress_popup(True)
     safety = backup()
     error = None
     try:
@@ -764,6 +795,8 @@ def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
     except ValueError:
         armed_before = set()
     before = set(os.listdir(RECORDED)) if os.path.isdir(RECORDED) else set()
+    if popup_state() == 0:
+        suppress_popup(True)
     safety = backup()
     error = None
     try:

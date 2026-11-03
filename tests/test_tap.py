@@ -24,7 +24,8 @@ def main() -> int:
         print(("ок      " if cond else "ПАДЕНИЕ ") + "%-46s %s" % (name, detail))
 
     title = render_job.window_title() or ""
-    if "With You" not in title:
+    allow_any = os.environ.get("FLCTRL_TEST_ANY") == "1"   # только для чтения!
+    if "With You" not in title and not allow_any:
         print("пропуск: открыт не демо-проект (%s)" % (title[:40] or "нет окна"))
         return 0
 

@@ -192,3 +192,147 @@ class LoudnessMeter:
         lufs = float(gated.mean()) if gated.size else float(above_abs.mean())
         return {"lufs": round(lufs, 2), "blocks": len(b),
                 "gated": int(gated.size)}
+
+
+class TransientMeter:
+    """Удары/хвосты в потоке по тем же правилам, что transients.analyse.
+
+    Звук не храним: держим спектральный поток (число на кадр 1024/256) и
+    огибающие трёх полос в кольце 0.30 с. Индексация абсолютная (номер сэмпла),
+    иначе кольцо съезжает и удары считаются не там.
+    """
+
+    FRAME = 1024
+    HOP = 256
+    BANDS = (("low", 20.0, 200.0), ("mid", 200.0, 2000.0), ("high", 2000.0, 16000.0))
+    KEEP_S = 0.35
+
+    def __init__(self, fs: int = 44100):
+        import scipy.signal as ss
+        self.fs = fs
+        self.win = np.hanning(self.FRAME)
+        self.buf = np.zeros(0, dtype=np.float64)
+        self.buf_start = 0                 # абсолютный сэмпл первого элемента buf
+        self.prev_mag = None
+        self.flux: list[float] = []
+        self.n_samples = 0                 # сколько всего скормлено
+        ny = fs / 2.0
+        self.sos, self.zi, self.env, self.env_start = {}, {}, {}, {}
+        for name, lo, hi in self.BANDS:
+            hi2 = min(hi, ny * 0.95)
+            self.sos[name] = ss.butter(4, [max(lo, 10.0) / ny, hi2 / ny],
+                                       btype="band", output="sos")
+            self.zi[name] = np.zeros((self.sos[name].shape[0], 2))
+            self.env[name] = np.zeros(0, dtype=np.float64)
+            self.env_start[name] = 0
+        self.keep = int(fs * self.KEEP_S)
+        self.hits: list[dict] = []
+
+    # ------------------------------------------------------------------ вход
+    def feed(self, x: np.ndarray) -> None:
+        import scipy.signal as ss
+        x = np.asarray(x, dtype=np.float64)
+        if x.ndim == 2:
+            x = x.mean(axis=1)
+        if x.size == 0:
+            return
+
+        for name, _lo, _hi in self.BANDS:
+            y, self.zi[name] = ss.sosfilt(self.sos[name], x, zi=self.zi[name])
+            env = np.concatenate([self.env[name], np.abs(y)])
+            if env.size > self.keep:
+                drop = env.size - self.keep
+                env = env[drop:]
+                self.env_start[name] += drop
+            self.env[name] = env
+
+        self.buf = np.concatenate([self.buf, x])
+        while self.buf_start + len(self.buf) >= self.buf_start + self.FRAME and                 len(self.buf) >= self.FRAME:
+            seg = self.buf[:self.FRAME] * self.win
+            mag = np.abs(np.fft.rfft(seg))
+            if self.prev_mag is not None:
+                step = float(np.maximum(0.0, np.log1p(10.0 * mag)
+                                        - np.log1p(10.0 * self.prev_mag)).sum())
+                self.flux.append(step)
+                self._maybe_onset(len(self.flux) - 1)
+            self.prev_mag = mag
+            self.buf = self.buf[self.HOP:]
+            self.buf_start += self.HOP
+        self.n_samples += x.size
+        for hit in self.hits:               # хвост доехал — меряем сразу
+            if "bands" not in hit and not hit.get("dropped"):
+                self._measure(hit)
+
+    # -------------------------------------------------------------- детекция
+    def _smooth_flux(self) -> np.ndarray:
+        f = np.asarray(self.flux, dtype=np.float64)
+        if f.size < 3:
+            return f
+        return np.convolve(f, np.ones(3) / 3.0, mode="same")
+
+    def _maybe_onset(self, idx: int) -> None:
+        # сглаживание у правого края усечено, поэтому судим по кадру на один назад
+        fl = self._smooth_flux()
+        j = idx - 1
+        if fl.size < 16 or j < 1 or j + 1 >= fl.size:
+            return
+        floor = max(0.05 * float(np.percentile(fl, 99.5)), float(np.median(fl)))
+        v = fl[j]
+        if v < floor or v < fl[j - 1] or v < fl[j + 1]:
+            return
+        win = max(3, int(self.fs / self.HOP * 0.4))
+        loc = fl[max(0, j - win):j + win]
+        if v < 1.15 * float(np.median(loc)):
+            return
+        gap = max(1, int(0.04 * self.fs / self.HOP))
+        if self.hits and j - self.hits[-1]["idx"] < gap:
+            return
+        self.hits.append({"idx": j, "sample": (j + 1) * self.HOP})
+        self._measure(self.hits[-1])
+
+    def _measure(self, hit: dict) -> None:
+        pre = int(self.fs * 0.02)
+        short = int(self.fs * 0.02)
+        long_ = int(self.fs * 0.20)
+        s = hit["sample"]
+        for name, _lo, _hi in self.BANDS:
+            start = s - pre
+            end = s + long_
+            a0 = self.env_start[name]
+            a1 = a0 + len(self.env[name])
+            if end > a1:
+                return                      # хвост ещё не пришёл — досчитаем позже
+            if start < a0:
+                hit["dropped"] = True       # окно уже уехало из кольца
+                return
+        hit["bands"] = {}
+        for name, _lo, _hi in self.BANDS:
+            a0 = self.env_start[name]
+            seg = self.env[name][s - pre - a0:s + long_ - a0]
+            if seg.size == 0 or seg.max() <= 0:
+                continue
+            peak_i = int(np.argmax(seg))
+            target = 0.9 * seg[peak_i]
+            reach = int(np.argmax(seg[:peak_i + 1] >= target)) if peak_i >= 0 else 0
+            a = float(self.env[name][s - a0:s + short - a0].mean()) + 1e-12
+            b = float(self.env[name][s + short - a0:s + short + long_ - a0].mean()) + 1e-12
+            hit["bands"][name] = {"attack_ms": round(1000.0 * reach / self.fs, 2),
+                                  "ts_db": round(float(10 * np.log10(a / b)), 2),
+                                  "ok": True}
+
+    def value(self) -> dict:
+        for hit in self.hits:                 # досчитать отложенные хвосты
+            if "bands" not in hit and not hit.get("dropped"):
+                self._measure(hit)
+        done = [h for h in self.hits if h.get("bands")]
+        bands = {}
+        for name, _lo, _hi in self.BANDS:
+            att = [h["bands"][name]["attack_ms"] for h in done if name in h["bands"]]
+            rts = [h["bands"][name]["ts_db"] for h in done if name in h["bands"]]
+            bands[name] = {"attack_ms": round(float(np.median(att)), 2) if att else None,
+                           "ts_db": round(float(np.median(rts)), 2) if rts else None,
+                           "n": len(rts)}
+        dur = self.n_samples / self.fs
+        return {"onsets": len(self.hits),
+                "onsets_s": round(len(self.hits) / dur, 2) if dur else 0.0,
+                "flux_frames": len(self.flux), "bands": bands}
