@@ -443,7 +443,7 @@ def capture_memory(tracks=None, seconds: float = 2.0, start: float | None = None
         if not int(_num(_bridge("transport.isRecording()"))):
             _bridge("transport.record()")
         if start is not None:
-            _bridge("transport.setSongPos(%r)" % float(start))
+            _bridge("transport.setSongPos(%r)" % min(1.0, max(0.0, float(start))))
         _bridge("transport.start()")
         time.sleep(seconds)
         _bridge("transport.stop()")
@@ -621,19 +621,18 @@ def _picture(cells, res, fc, times) -> str:
         return "не нарисовалось: %s" % str(exc)[:80]
 
 
-def clips_guard(enable: bool = True) -> dict:
-    """Авто-создание аудиоклипов в плейлисте: выключить.
+def clip_flag(value=None):
+    """Авто-создание клипов в плейлисте (HKCU\\...\\FL Studio 25\\AutoCreateClip).
 
-    FL при записи armed-дорожек пишет WAV и (если опция включена) вставляет его
-    клипом в плейлист. Клипы накладываются друг на друга — отсюда «в одном месте
-    резко громко». Опция живёт в меню микшера: Disk Recording → Auto-create audio
-    clip, а хранится в реестре как ``AutoCreateClip``. Читается при старте FL,
-    поэтому смена значения действует со следующего запуска.
+    FL читает это значение **в момент записи**, поэтому его можно погасить на время
+    снимка и вернуть как было. Именно из-за него записанные дорожки ложились клипами
+    в плейлист и накладывались друг на друга — в одном месте трека становилось резко
+    громко.
 
-    Возвращает текущее значение, прежнее (если меняли) и предупреждение.
+    ``value=None`` — только прочитать; ``0``/``1`` — поставить.
     """
     key = r"Software\Image-Line\FL Studio 25"
-    out = {"key": key, "value": None, "before": None, "changed": False, "needs_restart": False}
+    out = {"key": key, "value": None, "before": None, "changed": False}
     try:
         import winreg
     except Exception as exc:  # не Windows
@@ -643,12 +642,11 @@ def clips_guard(enable: bool = True) -> dict:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_READ) as k:
             out["value"] = int(winreg.QueryValueEx(k, "AutoCreateClip")[0])
         out["before"] = out["value"]
-        if enable and out["value"] != 0:
+        if value is not None and out["value"] != int(value):
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as k:
-                winreg.SetValueEx(k, "AutoCreateClip", 0, winreg.REG_SZ, "0")
-            out["value"] = 0
+                winreg.SetValueEx(k, "AutoCreateClip", 0, winreg.REG_SZ, str(int(value)))
+            out["value"] = int(value)
             out["changed"] = True
-        out["needs_restart"] = out["changed"] and bool(fl_pid())
     except FileNotFoundError:
         out["error"] = "в реестре нет AutoCreateClip"
     except Exception as exc:
@@ -656,18 +654,76 @@ def clips_guard(enable: bool = True) -> dict:
     return out
 
 
+def _undo_hint() -> dict:
+    """Позиция в истории undo: {'pos','count','text'}."""
+    try:
+        text = str(_bridge("general.getUndoLevelHint()", timeout=5)).strip().strip("'\"")
+        pos, _, count = text.partition("/")
+        return {"text": text, "pos": int(pos), "count": int(count)}
+    except Exception as exc:
+        return {"text": None, "error": str(exc)[:80]}
+
+
 def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
-            fade: bool = True, want_audio: bool = False, mode: str = "files") -> dict:
+            fade: bool = True, want_audio: bool = False, mode: str = "memory",
+            discard_take: bool = True) -> dict:
     """Снимок звука дорожек. mode="files" — надёжно (FL пишет и сразу удаляем),
-    mode="memory" — через хук, на диск не пишется ничего вообще."""
-    guard = clips_guard(True)
-    fn = capture_memory if str(mode).startswith("mem") else capture_files
-    res = fn(tracks=tracks, seconds=seconds, start=start, fade=fade,
-             want_audio=want_audio)
-    res["clips"] = guard
-    if guard.get("needs_restart"):
-        res["warning"] = ("включено авто-создание клипов, значение сброшено в 0 — "
-                          "действует после перезапуска FL; сейчас клипы ещё могут появиться")
+    mode="memory" — через хук, на диск не пишется ничего вообще.
+
+    ``start`` — доля длины проекта 0..1 (так его принимает ``transport.setSongPos``).
+
+    Плейлист не трогается:
+
+    1. на время снимка гасится ``AutoCreateClip`` — FL читает его в момент записи;
+    2. после снимка выбрасывается шаг записи из истории (``undoUpDown``), иначе FL
+       материализует клипы при следующем сохранении проекта;
+    3. значение ``AutoCreateClip`` возвращается как было — своя запись пользователя
+       работает по-прежнему.
+
+    Проверено на живом проекте: снимок отдаёт звук дорожки, а сохранение после него
+    не добавляет в плейлист ни одного клипа.
+    """
+    flag0 = clip_flag()
+    hint0 = _undo_hint()
+    clips = {"before": flag0.get("value"), "during": None, "after": None}
+    undone = 0
+    if flag0.get("value") != 0:
+        clip_flag(0)
+        clips["during"] = 0
+    try:
+        want_mem = str(mode).startswith("mem")
+        fn = capture_memory if want_mem else capture_files
+        res = fn(tracks=tracks, seconds=seconds, start=start, fade=fade,
+                 want_audio=want_audio)
+        # поток недоступен (нет демона хука) — тихо откатываемся на файлы
+        if want_mem and (res.get("error") or not (res.get("tracks") or {})):
+            res = capture_files(tracks=tracks, seconds=seconds, start=start, fade=fade,
+                                want_audio=want_audio)
+            res["mode_used"] = "files (fallback)"
+        else:
+            res["mode_used"] = "memory" if want_mem else "files"
+    finally:
+        if discard_take and hint0.get("text"):
+            hint1 = _undo_hint()
+            if hint1.get("text") and hint1.get("text") != hint0.get("text"):
+                try:
+                    _bridge("general.undoUpDown(-1)", timeout=10)
+                    time.sleep(0.2)
+                    h2 = _undo_hint()
+                    try:
+                        undone = 1 if int(h2.get("pos") or 0) > int(hint0.get("pos") or 0) else -1
+                    except (TypeError, ValueError):
+                        undone = -1
+                except Exception:
+                    undone = -1
+        if clips["during"] == 0 and clips["before"] is not None:
+            clip_flag(clips["before"])
+        clips["after"] = clip_flag().get("value")
+
+    res["clips"] = clips
+    res["take_discarded"] = undone
+    res["clips_clean"] = clips["after"] == clips["before"] and undone >= 0
+    res["undo"] = {"before": hint0.get("text"), "after": _undo_hint().get("text")}
     return res
 
 

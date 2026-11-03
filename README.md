@@ -118,7 +118,9 @@ The track list is read from the project at capture time (`mixer.getTrackCount()`
 nothing about the number of tracks is hardcoded, and any project size works. The counts
 quoted below are the size of the test project, not a limit.
 
-**`files` (default, recommended).** Save the project with Ctrl+S and copy the `.flp` as a
+**`memory` (default).** Streamed through the hook: FL writes, the hook hands the PCM over and zeroes the write length, so nothing but a 76-byte header reaches the disk (removed by `live.clean()`). If the hook daemon is not running, `capture()` falls back to `files` by itself and says so in `mode_used`.
+
+**`files`.** Save the project with Ctrl+S and copy the `.flp` as a
 restore point, arm the tracks, start recording, play from `start`, read the WAVs FL wrote,
 compute the tape, delete them, disarm, restore the previous mode. The `Recorded` folder is
 empty afterwards (verified). FL stays alive and the project is unchanged apart from
@@ -133,6 +135,9 @@ during development — hence the default.
 
 Both modes share: no project reload, no modal dialogs (FL's "Recording" popup is
 suppressed via `PopupRec`), and a save point before every capture.
+
+Neither mode touches the playlist: `AutoCreateClip` is cleared for the take and the recording
+step is rolled back afterwards, so a later save inserts no clips (see `docs/RULES.md`, rule 16).
 
 Details: [docs/LIVE.md](docs/LIVE.md) · [docs/LIVE.ru.md](docs/LIVE.ru.md)
 
