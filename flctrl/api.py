@@ -652,6 +652,17 @@ def call(op: str, args: dict | None = None, fl=None) -> dict:
                 res.pop("rows", None)
         return res
 
+    if op == "tracks.live":
+        import live
+        tracks = a.get("tracks")
+        tracks = [int(x) for x in tracks] if tracks else None
+        res = live.capture(tracks=tracks, seconds=float(a.get("seconds", 2.0)),
+                           start=a.get("start"))
+        for v in res["tracks"].values():
+            v.pop("mono", None)                  # сырые сэмплы наружу не отдаём
+        res["cleaned"] = live.clean()
+        return res
+
     if op == "pan.plan":
         import panplan
         stems = a.get("stems") or {}
@@ -1029,6 +1040,9 @@ OPS_HELP = {
     "clip.at": "{seconds|bar} — что звучит в этот момент (локальное время источников)",
     "inverse.solve": "{stems, against, cap_db} — обратная задача: гейны под цели микса",
     "tap.levels": "{tracks?, seconds?, rate_hz?} — живой RMS/пик по дорожкам",
+    "tracks.live": "{tracks?, seconds?, start?} — звук дорожек в память без записи на "
+                   "диск: на дорожку rms/пик/длительность + cleaned (сколько пустых "
+                   "файлов убрано)",
     "stream.run": "{seconds?, tracks?, rate_hz?|max, ring_s?} — поток метрик по ходу "
                   "игры: rms/пик/28 полос на дорожку + playing_at_start, coverage, "
                   "silent_tracks. Ничего не запускает и не пишет на диск",
