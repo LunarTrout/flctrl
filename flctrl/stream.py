@@ -84,6 +84,33 @@ rpc.exports.exactStop = function () {
   return true;
 };
 
+rpc.exports.pumpAll = function (tracks) {
+  // ОДНО сообщение на круг вместо 32: заголовок (track,frames)* + данные
+  try {
+    const fe = Process.getModuleByName('FLEngine_x64.dll');
+    const arr = fe.base.add(0x10A7EB0).readPointer();
+    const count = fe.base.add(0x10A9850).readPointer().readU32();
+    const frames = fe.base.add(0x10AA730).readPointer().readU32();
+    const per = frames * 8;
+    const list = [];
+    for (const t of tracks) {
+      if (t >= count) continue;
+      const p = arr.add(t * 0x1474).add(0x34).readPointer();
+      if (p.isNull()) continue;
+      list.push([t, p.readByteArray(per)]);
+    }
+    const total = 8 * list.length + per * list.length;
+    const buf = new ArrayBuffer(total);
+    const u8 = new Uint8Array(buf);
+    const dv = new DataView(buf);
+    let o = 0;
+    for (const [t] of list) { dv.setUint32(o, t, true); dv.setUint32(o + 4, frames, true); o += 8; }
+    for (const [, data] of list) { u8.set(new Uint8Array(data), o); o += per; }
+    send({ kind: 'all', frames: frames, n: list.length }, buf);
+    return { frames: frames, count: count, sent: list.length };
+  } catch (e) { return { error: String(e) }; }
+};
+
 rpc.exports.pump = function (tracks) {
   // блоки уходят бинарём через send(ArrayBuffer): вдвое меньше, без hex-строк
   try {
@@ -141,6 +168,14 @@ def pid_of(name: str = "FL64.exe"):
     return None
 
 
+def _num(value, default=0.0):
+    """Мост отдаёт строки: bool('0') == True — поэтому приводим к числу."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _bridge(expr, default=None):
     lib = os.path.dirname(os.path.abspath(__file__))
     if lib not in sys.path:
@@ -169,6 +204,7 @@ class Stream:
         self.tracks = [t for t in (tracks or range(self.count)) if t < self.count]
         self.ring_seconds = ring_seconds
         self.meters: dict[int, dict] = {}
+        self._last: dict[int, bytes] = {}
         self.ring: list[dict] = []
         self._inbox: list[tuple[int, bytes, int]] = []
         self.script.on('message', self._on_message)
@@ -177,10 +213,21 @@ class Stream:
         self._start_time = None
 
     def _on_message(self, message, data):
-        if message.get("type") == "send":
-            p = message.get("payload") or {}
-            if p.get("kind") == "block" and data:
-                self._inbox.append((int(p["track"]), bytes(data), int(p["frames"])))
+        if message.get("type") != "send":
+            return
+        p = message.get("payload") or {}
+        if p.get("kind") == "block" and data:
+            self._inbox.append((int(p["track"]), bytes(data), int(p["frames"])))
+        elif p.get("kind") == "all" and data:
+            raw = bytes(data)
+            frames = int(p["frames"])
+            per = frames * 8
+            n = int(p["n"])
+            head = 8 * n
+            for i in range(n):
+                t = int.from_bytes(raw[i * 8:i * 8 + 4], "little")
+                off = head + i * per
+                self._inbox.append((t, raw[off:off + per], frames))
 
     def close(self) -> None:
         try:
@@ -195,24 +242,30 @@ class Stream:
         self.close()
 
     # ------------------------------------------------------------------ поток
-    def run(self, seconds: float = 5.0, rate_hz: float = 30.0,
+    def run(self, seconds: float = 5.0, rate_hz: float | None = 30.0,
             exact_tracks: list[int] | None = None) -> dict:
+        """Поток метрик. `rate_hz=None` — читать максимально быстро без повторов.
+
+        Быстрее реального времени читать нельзя (источник играет 1x), но можно
+        читать БЫСТРЕЕ, чем FL выдаёт блоки, и отбрасывать повторы: тогда каждый
+        блок попадает в счёт ровно один раз, и покрытие становится полным.
+        """
         import numpy as np
 
-        self._start_beats = _bridge("float(transport.getSongPos(1))", 0.0)
+        self._start_beats = _num(_bridge("transport.getSongPos(1)", 0.0))
         self._start_time = time.time()
-        playing = bool(_bridge("transport.isPlaying()", 0))
+        playing = _num(_bridge("transport.isPlaying()", 0)) > 0
         if exact_tracks:
             self.exact_tracks = [int(t) for t in exact_tracks]
             self.script.exports_sync.exact_arm(self.exact_tracks)
         else:
             self.exact_tracks = []
-        period = 1.0 / max(rate_hz, 1.0)
+        period = 1.0 / max(rate_hz or 0.0, 1.0)
         end = self._start_time + seconds
         rounds = 0
 
         while time.time() < end:
-            meta = self.script.exports_sync.pump(self.tracks)
+            meta = self.script.exports_sync.pump_all(self.tracks)
             if not meta or meta.get("error"):
                 time.sleep(period)
                 continue
@@ -221,6 +274,9 @@ class Stream:
             posted, self._inbox = self._inbox, []
             got = {}
             for track, buf, nf in posted:
+                if self._last.get(track) == buf:      # тот же блок, читали чаще
+                    continue
+                self._last[track] = buf
                 got[track] = buf
 
             # кольцо: сырьё последних секунд (для транзиентов/формы волны)
@@ -258,11 +314,12 @@ class Stream:
                         "blocks": d["blocks"], "samples": d["n"]}
             self.rows.append(row)
             rounds += 1
-            time.sleep(period)
+            if rate_hz:
+                time.sleep(period)
 
         if exact_tracks:
             self.script.exports_sync.exact_stop()
-        beats_per_round = (self.frames / 96.0) * (self.fs / self.frames) / max(rate_hz, 1)
+        beats_per_round = None
         silent = [t for t in self.tracks
                   if not any(r["tracks"].get(t, {}).get("rms") for r in self.rows)]
         out = {"rounds": rounds, "tracks": self.tracks, "frames": frames,
@@ -270,7 +327,8 @@ class Stream:
                "row_seconds": round(seconds / max(rounds, 1), 4),
                "playing_at_start": playing,
                "silent_tracks": silent,
-               "coverage": round(rounds * frames / max(seconds * self.fs, 1e-9), 3)}
+               "coverage": round(sum(len(r["tracks"]) for r in self.rows) * frames
+                                 / max(seconds * self.fs * max(len(self.tracks), 1), 1e-9), 3)}
         if not playing:
             out["note"] = ("транспорт стоял: захвачена тишина. Запусти воспроизведение "
                            "(transport.start) и повтори — инструмент сам ничего не запускает")
@@ -288,10 +346,11 @@ class Stream:
                 continue
             rms = sum(v["rms"] for v in vals) / len(vals)
             peak = max(v["peak"] for v in vals)
-            bands = {}
-            for lo, _hi in BANDS:
-                bands[lo] = round(sum(v["bands"][lo] for v in vals) / len(vals), 2)
-            out[t] = {"rms": round(rms, 5), "peak": round(peak, 4), "bands": bands}
+            have = [v["bands"] for v in vals if v.get("bands")]
+            bands = ([round(sum(row[i] for row in have) / len(have), 2)
+                      for i in range(len(have[0]))] if have else [])
+            out[t] = {"rms": round(rms, 5), "peak": round(peak, 4),
+                      "bands": bands, "fc": [float(v) for v in incr.FC]}
         return out
 
     def export(self, path: str) -> dict:

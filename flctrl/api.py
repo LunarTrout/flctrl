@@ -622,12 +622,26 @@ def call(op: str, args: dict | None = None, fl=None) -> dict:
 
     if op == "tap.record":
         import tap
-        tracks = a.get("tracks")
-        if not tracks:
-            raise ApiError("bad_args", op, need=["tracks"])
         outdir = a.get("outdir") or os.path.join(os.environ.get("TEMP", "."), "fltap")
+        tracks = a.get("tracks")
+        tracks = [int(x) for x in tracks] if tracks else None     # None = все
         with tap.Tap() as t:
-            return t.record([int(x) for x in tracks], float(a.get("seconds", 2.0)), outdir)
+            return t.record(tracks, float(a.get("seconds", 2.0)), outdir,
+                            include_silent=bool(a.get("include_silent", False)))
+
+    if op == "stream.run":
+        import stream
+        tracks = a.get("tracks")
+        tracks = [int(x) for x in tracks] if tracks else None
+        rate = a.get("rate_hz", 30.0)
+        if rate in (0, "max", None, False):
+            rate = None                      # читать максимально часто, без повторов
+        with stream.Stream(tracks=tracks, ring_seconds=float(a.get("ring_s", 2.0))) as st:
+            res = st.run(float(a.get("seconds", 5.0)), rate_hz=rate)
+            res["summary"] = st.summary()    # по дорожке: средний rms/пик + полосы
+            if not a.get("rows"):
+                res.pop("rows", None)
+        return res
 
     if op == "pan.plan":
         import panplan
@@ -1006,6 +1020,9 @@ OPS_HELP = {
     "clip.at": "{seconds|bar} — что звучит в этот момент (локальное время источников)",
     "inverse.solve": "{stems, against, cap_db} — обратная задача: гейны под цели микса",
     "tap.levels": "{tracks?, seconds?, rate_hz?} — живой RMS/пик по дорожкам",
+    "stream.run": "{seconds?, tracks?, rate_hz?|max, ring_s?} — поток метрик по ходу "
+                  "игры: rms/пик/28 полос на дорожку + playing_at_start, coverage, "
+                  "silent_tracks. Ничего не запускает и не пишет на диск",
     "tap.record": "{tracks, seconds, outdir?} — писать дорожки в WAV",
     "pan.plan": "{stems, a, b, section_s} — план панорамы по секциям",
     "pan.check": "{plan} — проверка шага и зеркальности",
