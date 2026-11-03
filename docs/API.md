@@ -68,7 +68,7 @@ machine-readable code.
 | `tracks` | per track: `name`, `role`, `rms`, `peak`, `silent`, `tape`, `transients` |
 | `mode_used` | `memory` (stream, default) or `files` (fallback when the hook daemon is down) |
 | `clips` | `{before, during, after}` — `AutoCreateClip` around the take |
-| `take_discarded` | `1` when the recording step was rolled back, `-1` if the rollback could not be verified |
+| `take_discarded` | `1` — the recording step was rolled back; `0` — there was no step to roll back; `-1` — the rollback failed |
 | `clips_clean` | the playlist is guaranteed untouched (flag restored and the take dropped) |
 | `undo` | undo hint before/after (`general.getUndoLevelHint`) |
 | `project_restored` | only with `discard_take=False`: what the transaction did |

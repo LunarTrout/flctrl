@@ -68,7 +68,7 @@
 | `tracks` | по дорожке: `name`, `role`, `rms`, `peak`, `silent`, `tape`, `transients` |
 | `mode_used` | `memory` (поток, по умолчанию) или `files` (запасной путь, если демон хука не поднят) |
 | `clips` | `{before, during, after}` — `AutoCreateClip` вокруг тейка |
-| `take_discarded` | `1`, если шаг записи откатили; `-1`, если откат не удалось подтвердить |
+| `take_discarded` | `1` — шаг записи откатили; `0` — шага не было; `-1` — откат не удался |
 | `clips_clean` | плейлист гарантированно не тронут (флаг возвращён, тейк выброшен) |
 | `undo` | подсказка undo до/после (`general.getUndoLevelHint`) |
 | `project_restored` | только при `discard_take=False`: что сделала транзакция |

@@ -705,15 +705,16 @@ def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
     finally:
         if discard_take and hint0.get("text"):
             hint1 = _undo_hint()
-            if hint1.get("text") and hint1.get("text") != hint0.get("text"):
+            if hint1.get("text") and hint1.get("text") == hint0.get("text"):
+                undone = 0                     # запись не создала шага — откатывать нечего
+            elif hint1.get("text"):
                 try:
                     _bridge("general.undoUpDown(-1)", timeout=10)
                     time.sleep(0.2)
                     h2 = _undo_hint()
-                    try:
-                        undone = 1 if int(h2.get("pos") or 0) > int(hint0.get("pos") or 0) else -1
-                    except (TypeError, ValueError):
-                        undone = -1
+                    # важно, что история сдвинулась после нашего undoUpDown,
+                    # а не в какую сторону нумеруются позиции
+                    undone = 1 if h2.get("text") and h2.get("text") != hint1.get("text") else -1
                 except Exception:
                     undone = -1
         if clips["during"] == 0 and clips["before"] is not None:
