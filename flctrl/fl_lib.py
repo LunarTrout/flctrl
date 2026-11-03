@@ -332,6 +332,73 @@ class _State:
         return {"ok": True, "tracks": int(v),
                 "latency_ms": round((time.perf_counter() - t0) * 1000, 1)}
 
+    # что именно проверяем: имя, выражение, ожидаемый тип
+    PROBES = (
+        ("дорожек", "mixer.trackCount()", "int"),
+        ("имя дорожки", "str(mixer.getTrackName(0))", "str"),
+        ("громкость", "float(mixer.getTrackVolume(0))", "float"),
+        ("панорама", "float(mixer.getTrackPan(0))", "float"),
+        ("mute", "bool(mixer.isTrackMuted(0))", "bool"),
+        ("solo", "bool(mixer.isTrackSolo(0))", "bool"),
+        ("идёт ли игра", "bool(transport.isPlaying())", "bool"),
+        ("позиция", "float(transport.getSongPos(1))", "float"),
+        ("слот плагина", "bool(plugins.isValid(0, 0))", "bool"),
+        ("каналы рэка", "int(channels.channelCount())", "int"),
+    )
+
+    def doctor(self) -> dict:
+        """Самодиагностика: что из живого API реально отвечает прямо сейчас.
+
+        Только чтения — проект не меняется. Нужна, чтобы не гадать, почему
+        «не работает»: сразу видно, отвалился мост целиком или отдельная
+        ветка API (например, каналы после неудачной вставки).
+        """
+        import time
+        rows = []
+        ok_count = 0
+        for label, expr, kind in self.PROBES:
+            t0 = time.perf_counter()
+            entry = {"что": label, "expr": expr}
+            try:
+                value = self._live(expr, heal=False, attempts=1)
+                ms = round((time.perf_counter() - t0) * 1000, 1)
+                entry.update({"ok": True, "ms": ms, "value": str(value)[:60]})
+                ok_count += 1
+            except Exception as exc:
+                entry.update({"ok": False,
+                              "ms": round((time.perf_counter() - t0) * 1000, 1),
+                              "error": str(exc)[:120]})
+            rows.append(entry)
+        failures = [r["что"] for r in rows if not r["ok"]]
+        return {"ok": not failures, "passed": "%d из %d" % (ok_count, len(rows)),
+                "tracks": self.health().get("tracks"),
+                "failures": failures, "probes": rows,
+                "hint": ("" if not failures else
+                         "не отвечает: " + ", ".join(failures) +
+                         ". Если молчит всё — проверь мост (fl_link_ensure) и "
+                         "F10 → MIDI settings → Update MIDI scripts.")}
+
+    def capabilities(self) -> dict:
+        """Какие ветки API существуют: dir() по модулям, без вызовов."""
+        import ast
+        import re
+
+        modules = ("mixer", "plugins", "channels", "playlist", "transport",
+                   "general", "ui", "patterns")
+        out = {}
+        for mod in modules:
+            try:
+                text = self._live("str([n for n in dir(%s) if not n.startswith('_')])" % mod)
+                try:
+                    names = ast.literal_eval(text)
+                except Exception:
+                    # длинный ответ транспорт режет — вытаскиваем имена как есть
+                    names = re.findall(r"'([A-Za-z_][A-Za-z0-9_]*)'", str(text))
+                out[mod] = list(names)
+            except Exception as exc:
+                out[mod] = {"error": str(exc)[:100]}
+        return out
+
     def channels(self, chunk: int = 6):
         """Каналы рэка. Кусками: длинные выражения транспорт режет."""
         n = int(self._live("channels.channelCount()"))
@@ -610,13 +677,16 @@ class _Hear:
                stems: dict | None = None, a: float | None = None,
                b: float | None = None, impulse: str | None = None,
                sine: str | None = None, ducked: str | None = None,
-               vocal: str | None = None, masker: str | None = None) -> dict:
+               vocal: str | None = None, masker: str | None = None,
+               sii_baseline: list[float] | None = None,
+               targets_path: str | None = None) -> dict:
         """Полный отчёт одним вызовом: покрытие проверок, действия, markdown."""
         import json as _json
         import tempfile
         payload = {"refs": refs, "stems": stems, "a": a, "b": b,
                    "impulse": impulse, "sine": sine, "ducked": ducked,
-                   "vocal": vocal, "masker": masker}
+                   "vocal": vocal, "masker": masker,
+                   "sii_baseline": sii_baseline, "targets_path": targets_path}
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
                                          encoding="utf-8") as f:
             _json.dump(payload, f, ensure_ascii=False)

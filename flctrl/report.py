@@ -74,6 +74,15 @@ def _derive_actions(res: dict) -> list[str]:
             actions.append("провал на %.0f с: полоса %d Гц упала на %.1f дБ — "
                            "проверить, что там играет" % (h["t"], h["band"], h["drop_db"]))
 
+    dec = res.get("decisions") or {}
+    for e in (dec.get("edits") or [])[:6]:
+        actions.append("%s, «%s», %.0f–%.0f с: %+.1f дБ (наш %s, цель %s)%s" % (
+            e["stem"], e["region_label"], e["span"][0], e["span"][1], e["do_db"],
+            ("%+.1f дБ" % e["snr_db"]) if e.get("snr_db") is not None else
+            ("A=%.2f" % (e.get("audib") or 0)),
+            ("%+.1f дБ" % e["goal_db"]) if e.get("goal_db") is not None else "-",
+            " — упёрлось в кап" if e.get("capped") else ""))
+
     ef = res.get("effects_ir") or {}
     if ef.get("rt60"):
         actions.append("реверб: RT60 %.2f с, EDT %.2f с, C50 %.1f дБ — сверить "
@@ -90,10 +99,12 @@ def build(mine: str, refs: list[str] | None = None, a: float | None = None,
           impulse: str | None = None, sine: str | None = None,
           ducked: str | None = None, vocal: str | None = None,
           masker: str | None = None,
-          sii_baseline: list[float] | None = None) -> dict:
+          sii_baseline: list[float] | None = None,
+          targets_path: str | None = None) -> dict:
     ctx = {"mine": mine, "refs": refs, "a": a, "b": b, "stems": stems,
            "impulse": impulse, "sine": sine, "ducked": ducked,
-           "vocal": vocal, "masker": masker, "sii_baseline": sii_baseline}
+           "vocal": vocal, "masker": masker, "sii_baseline": sii_baseline,
+           "targets_path": targets_path}
     cov = checks.run_all(ctx)
     res = cov["results"]
     return {"coverage": cov, "results": res, "actions": _derive_actions(res),
@@ -225,6 +236,27 @@ def to_markdown(rep: dict) -> str:
                 b["f"], b["speech"], b["masker"], b["masked"],
                 b["audibility"], b["importance"]))
 
+    dec = res.get("decisions")
+    if dec and dec.get("edits"):
+        lines.append("")
+        lines.append("## Правки по секциям (из измерений)")
+        lines.append("")
+        lines.append("Цели: %s." % ("из корпуса" if dec.get("targets_used")
+                                  else "учебные, «наравне с остальным»"))
+        lines.append("")
+        lines.append("| инструмент | полоса | участок, с | наш, дБ | цель, дБ | правка |")
+        lines.append("|---|---|---|---|---|---|")
+        for e in dec["edits"]:
+            lines.append("| %s | %s | %.0f–%.0f | %s | %s | %+.1f дБ%s |" % (
+                e["stem"], e["region_label"], e["span"][0], e["span"][1],
+                ("%+.1f" % e["snr_db"]) if e.get("snr_db") is not None else "—",
+                ("%+.1f" % e["goal_db"]) if e.get("goal_db") is not None else "—",
+                e["do_db"], " (кап)" if e.get("capped") else ""))
+        if dec.get("skipped"):
+            lines.append("")
+            for s in dec["skipped"]:
+                lines.append("- пропущено: %s — %s" % (s["stem"], s["why"]))
+
     if cov["skipped"]:
         lines.append("")
         lines.append("## Не проверено (и почему)")
@@ -259,6 +291,8 @@ def main(argv=None) -> int:
     ap.add_argument("--masker", default=None)
     ap.add_argument("--sii-baseline", default=None,
                     help="JSON с базовой линией SII референсов (sii_baseline.json)")
+    ap.add_argument("--targets", default=None,
+                    help="JSON целей по полосам (snr_baseline.json)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args(argv)
 
@@ -274,7 +308,8 @@ def main(argv=None) -> int:
         baseline = [r["sii"] for r in data.get("refs", [])] or None
 
     rep = build(a.mine, a.refs or None, a.a, a.b, stems or None,
-                a.impulse, a.sine, a.ducked, a.vocal, a.masker, baseline)
+                a.impulse, a.sine, a.ducked, a.vocal, a.masker, baseline,
+                a.targets)
     md = to_markdown(rep)
     if a.out:
         with open(a.out, "w", encoding="utf-8") as f:

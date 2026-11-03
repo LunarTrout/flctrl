@@ -71,6 +71,30 @@ def _effects_duck(ctx: dict) -> dict:
     return effects.ducking(x, fs)
 
 
+def _decisions(ctx: dict) -> dict:
+    """План правок по секциям: где, в какой полосе и на сколько дБ."""
+    import decide
+    import partial
+    import roles as roles_mod
+    import snrtargets
+
+    stems = ctx["stems"]
+    attr = partial.attribute_mg(ctx["mix"], stems, ctx.get("a"), ctx.get("b"),
+                                section_s=8.0)
+    roles_map = {n: roles_mod.role_of(n, p) for n, p in stems.items()}
+    tg = {}
+    if ctx.get("targets_path"):
+        model = snrtargets.load(ctx["targets_path"])
+        for name, role in roles_map.items():
+            t = snrtargets.for_role(model, role)
+            if t:
+                tg[role] = t
+    res = decide.plan(attr, targets=tg or None, roles_map=roles_map)
+    res["roles"] = roles_map
+    res["targets_used"] = bool(tg)
+    return res
+
+
 def _speech(ctx: dict) -> dict:
     import speech
     return speech.intelligibility(ctx["vocal"], ctx["masker"],
@@ -93,6 +117,8 @@ REGISTRY: list[Check] = [
           _wall, "микс"),
     Check("roles", "Слышимость ролей (partial loudness)", ("stems",),
           _roles, "роли"),
+    Check("decisions", "Правки по секциям: где и на сколько дБ", ("stems",),
+          _decisions, "роли"),
     Check("speech", "Разборчивость вокала (SII, ANSI S3.5)",
           ("vocal", "masker"), _speech, "роли",
           "нужен вокал отдельно и остальной микс как маскер"),

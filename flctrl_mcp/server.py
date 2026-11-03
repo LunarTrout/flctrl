@@ -283,6 +283,22 @@ def fl_ping() -> dict:
 
 
 @tool
+def fl_doctor() -> dict:
+    """Самодиагностика живого API: десять чтений с временем и результатом.
+
+    Показывает, отвалился мост целиком или отдельная ветка (каналы, слоты,
+    транспорт). Только чтения — проект не меняется.
+    """
+    return fl.state.doctor()
+
+
+@tool
+def fl_capabilities() -> dict:
+    """Какие функции реально существуют в живом API FL (dir по модулям)."""
+    return fl.state.capabilities()
+
+
+@tool
 def fl_link_ensure() -> dict:
     """Поднять посредник, если он упал. Библиотека делает это и сама."""
     return fl.link.ensure()
