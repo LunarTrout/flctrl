@@ -410,6 +410,21 @@ def fl_report(mine: str, refs: list[str] | None = None,
 
 
 @tool
+def fl_cache(action: str = "stats", scope: str | None = None) -> dict:
+    """Кэш измерений: статистика или очистка.
+
+    Считает один и тот же файл один раз: правка файла или смена окна
+    сбрасывают запись автоматически. action="clear" чистит всё или одну
+    область (audit, wall, seccomp).
+    """
+    import cache
+
+    if action == "clear":
+        return cache.clear(scope)
+    return cache.stats()
+
+
+@tool
 def fl_wall(mine: str, refs: list[str], a: float | None = None,
             b: float | None = None, section_s: float = 8.0) -> dict:
     """Провалы по полосам и толщина «стены», в сравнении с референсами.

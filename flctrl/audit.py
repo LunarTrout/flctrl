@@ -100,6 +100,14 @@ def _onsets(x: np.ndarray, fs: int) -> dict:
 
 
 def measure(path: str, a: float | None = None, b: float | None = None) -> dict:
+    """Полный набор измеримых фронтов для одного файла (с кэшем по файлу)."""
+    import cache
+
+    return cache.memo("audit", [os.path.abspath(path), a, b],
+                      lambda: _measure(path, a, b))
+
+
+def _measure(path: str, a: float | None = None, b: float | None = None) -> dict:
     """Полный набор измеримых фронтов для одного файла."""
     x, fs = _read(path, a, b)
     mono = x.mean(axis=1)

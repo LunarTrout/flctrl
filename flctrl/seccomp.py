@@ -106,6 +106,16 @@ def _sim(a: list[float], b: list[float]) -> float:
 def compare(mine_path: str, ref_paths: list[str], a=None, b=None,
             min_len: float = 8.0) -> dict:
     """Каждой нашей секции — самая похожая секция референсов и дельты."""
+    import cache
+
+    parts = [os.path.abspath(mine_path)] + [os.path.abspath(p) for p in ref_paths]
+    parts += [a, b, min_len]
+    return cache.memo("seccomp", parts,
+                      lambda: _compare(mine_path, ref_paths, a, b, min_len))
+
+
+def _compare(mine_path: str, ref_paths: list[str], a=None, b=None,
+             min_len: float = 8.0) -> dict:
     mine = sections(mine_path, a, b, min_len)
     refs = []
     for p in ref_paths:

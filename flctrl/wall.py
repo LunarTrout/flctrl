@@ -49,7 +49,16 @@ def _db(power: np.ndarray) -> np.ndarray:
 
 def analyze(path: str, a: float | None = None, b: float | None = None,
             section_s: float = 8.0, hole_db: float = HOLE_DB) -> dict:
-    """Найти провалы и оценить толщину стены."""
+    """Найти провалы и оценить толщину стены (с кэшем по файлу)."""
+    import cache
+    import os as _os
+
+    return cache.memo("wall", [_os.path.abspath(path), a, b, section_s, hole_db],
+                      lambda: _analyze(path, a, b, section_s, hole_db))
+
+
+def _analyze(path: str, a: float | None = None, b: float | None = None,
+             section_s: float = 8.0, hole_db: float = HOLE_DB) -> dict:
     mid, freqs, hop_s = _frames(path, a, b)
     band_pow = _band_power(mid, freqs)
     band_db = _db(band_pow)
