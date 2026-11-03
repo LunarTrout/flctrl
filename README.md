@@ -1,314 +1,253 @@
-# flstudio-lib
+# flctrl — measurement-first mixing for FL Studio
 
-**Полный программный доступ к FL Studio: видеть проект, слышать результат,
-управлять любой ручкой и создавать объекты вживую — без скриншотов, без
-кликов и без перезапуска проекта.**
+`flctrl` is a Python library that lets a machine *hear* an FL Studio project the way an
+engineer does: it captures the audio of every mixer track **live**, turns it into a dense
+but readable description (a "tape"), catches short events that a 100 ms window would
+smear, and compares any two pictures on the same axes.
 
----
-
-## Зачем это
-
-FL Studio — единственная крупная DAW без публичного API. Отсюда две проблемы.
-
-**Первая: ничего нельзя автоматизировать.** Вставить плагин, создать канал,
-положить клип — только руками. Комьюнити-обходы умеют читать проект, но не
-менять его: `flapi` заброшен, сторонние MCP-проекты честно пишут, что обхода
-нет.
-
-**Вторая, более важная: сведение идёт вслепую.** Даже имея доступ к ручкам,
-непонятно, что крутить: «стало лучше» — это ощущение, а не число. А решение,
-принятое по ощущению, невозможно ни проверить, ни откатить, ни повторить.
-
-Библиотека решает обе. Первую — вызовом родных функций движка через Frida.
-Вторую — слоем слуха, который превращает звук в измеримые величины
-(громкость в сонах, резкость в acum, маскировка в дБ) и проверяет каждое
-решение числом.
+It exists because of one stubborn constraint: **reference tracks arrive as a single stereo
+file, there are no stems, and there never will be.** So this library never tries to split a
+reference. It measures the reference in exactly the same units as your own mix and solves
+the inverse problem instead: which gains, EQ moves and pan positions make *your* tracks sum
+into the reference's numbers.
 
 ---
 
-## Что это даёт
+## Contents
 
-Три независимых канала доступа, которые дополняют друг друга:
+- [What it solves](#what-it-solves)
+- [Three ideas](#three-ideas)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Live capture](#live-capture)
+- [The tape](#the-tape)
+- [Events](#events)
+- [Save points](#save-points)
+- [API surface](#api-surface)
+- [Repository layout](#repository-layout)
+- [Limits](#limits)
+- [Documentation](#documentation)
+- [Status](#status)
 
-| Канал | Что умеет | Цена |
+---
+
+## What it solves
+
+Mixing by ear against a reference is slow and unrepeatable. Mixing by numbers usually
+fails for another reason: the numbers describe the *master*, while the reference has no
+tracks at all. `flctrl` closes the gap from both sides.
+
+| Side | What we have | What we do |
 |---|---|---|
-| **Файл `.flp`** | прочитать всё: дорожки, каналы, плагины, плейлист, клипы с путями, автоматизацию, темп | только сохранённое состояние |
-| **Мост контроллера** | живое управление: любая ручка плагина, громкость, панорама, mute/solo, маршруты, транспорт, ноты | не создаёт объекты |
-| **Frida** | создание объектов: вставка, удаление, замена плагина **без перезапуска** | пока только плагины |
+| Your project | 29 mixer tracks, every knob reachable | capture each track live, measure it, keep the numbers |
+| Reference | one stereo file, no stems | measure it with the same code, same bands, same time grid |
+| Comparison | different sources | put both in one cube (`time × track/role × band × metric`) and subtract |
+
+Everything else — EQ moves, pan plans, the inverse solver — consumes those numbers instead
+of guessing.
+
+## Three ideas
+
+**The cube.** Every measurement has the same shape: `time × track (or role) × band ×
+metric`. A frame is a 2-D slice with named axes, units and explicit coverage
+(`frames.make_frame`). Missing cells are `None`, never zero, so comparison is a plain
+subtraction rather than a special case.
+
+**The tape.** For each track, for each 0.1 s cell, a full feature vector: 28 third-octave
+bands, 24 ERB bands, loudness, timbre descriptors, pitch, harmony, stereo, dynamics. About
+1 KB per cell — three orders of magnitude smaller than the audio it describes (14.5 KB per
+second per track versus ~350 KB of 44.1 kHz stereo float).
+
+**Events.** A 100 ms cell cannot represent a 20 ms blast-beat hit. A separate 2 ms pass
+emits short events — onsets, level jumps, clipping — each with peak, duration, crest, band
+and centroid. Measured: **39 of 40 hits detected at 300 BPM 32nd notes (25 ms apart)**.
 
 ---
 
-## Главное, чего нет больше нигде
+## Requirements
 
-**Живая вставка плагина.** Полторы секунды, без закрытия проекта, без
-перезагрузки, с настоящей загрузкой DLL и настоящим состоянием.
+- Windows 10/11 (live capture relies on FL's Disk Recording and Windows registry specifics)
+- FL Studio 2025 (tested on 25.2.5 build 5319, Producer Edition)
+- Python 3.12 for the live path: `frida`, `numpy`, `scipy`, `soundfile`, `pytest`
+- The FL controller bridge on `127.0.0.1:9787` (see the companion MCP repository)
+- FL's built-in **Disk Recording** — no plugins, no manual project setup
 
-```
-live_start                → pid 10100
-live_slots(2)    0.21 с   → 2:0 занят (36 параметров), 2:1 занят (18), 2:2 и 2:3 пусты
-live_insert      1.22 с   → state 2, mod 0x50440000, params 18, isValid = 1
-live_delete      1.45 с   → state -1, isValid = 0
-```
+Offline work (files, references, frames) needs only `numpy` + `scipy` + `soundfile`.
 
-Проверено не только по ответу FL: проект сохранялся, файл вырос с 68 380
-до 68 754 байт, после перезапуска плагины остались на месте.
-
-Так же работают удаление и замена. Всё остальное — чтение проекта, замер,
-правка ручек — работает и без этого.
-
----
-
-## Основные возможности
-
-### Видеть
+## Quick start
 
 ```python
-fl.state.playlist("song.flp")     # словарь: дорожка → клипы
-fl.state.clip_files("song.flp")   # список: позиция, длина, путь к аудио
-fl.state.automation("song.flp")   # автоматизация с точками
-fl.state.tracks()                 # живой микшер
-fl.state.plugins()                # слоты и имена
-```
+import sys
+sys.path.insert(0, r"C:/path/to/flstudio-lib/flctrl")
 
-### Слышать
+from flctrl import api, live
+
+# Capture every mixer track for 2 seconds starting at bar 8
+res = api.call("tracks.live", {"seconds": 2.0, "start": 8.0})
+
+for tid, tr in res["tracks"].items():
+    print(tid, tr["name"], tr["role"], tr["rms"], tr["peak"],
+          tr["transients"]["onsets_s"])
+
+print(res["masking"]["pairs"][:5])     # who covers whom
+print(res["provenance"][:3])           # what is playing in the project, every 0.5 s
+
+# The audio itself is available on explicit request, never as a side effect
+files = api.call("tracks.dump", {"tracks": [1, 12], "seconds": 5.0,
+                                 "outdir": r"C:/tmp/stems", "fmt": "mp3"})["files"]
+```
 
 ```python
-fl.hear.measure("mix.wav", 60, 90)          # соны, фоны, резкость, LUFS, crest, LDR
-fl.hear.bands("mix.wav")                    # 240 полос: уровень, ширина, модуляция
-fl.hear.psycho("mix.wav", 60, 90)           # грубость и тональность по 53 полосам
-fl.hear.masking(stems, mix_path="mix.wav")  # кто кого забивает, в каких полосах
-fl.hear.unmask(stems, "gtr", "vocal")       # сколько вернётся, если убрать соседа
-fl.hear.sections("mix.wav")                 # секции по плотности
-fl.hear.match("mix.wav", "ref.mp3")         # сопоставить однотипные секции
+# Any file goes through the same code: a reference, a render, a bounced stem
+import soundfile as sf
+from flctrl import timbre, events
+
+x, fs = sf.read("reference.wav", always_2d=True)
+tape = timbre.analyze(x, fs)   # cells + LUFS + LRA + SII + harmony + checks
+ev = events.detect(x, fs)      # the 2 ms layer
+print(tape["lufs"], tape["lra"], tape["sii"], ev["count"])
 ```
 
-### Узнавать
+## Live capture
 
-```python
-fl.hear.describe("mix.wav")                 # «на что похоже по материалу»
-fl.hear.nearest("frag.wav", ["refs/*.mp3"]) # что ближе всего
-fl.hear.style_sim("mix.wav", "grima.mp3")   # «похож ли подход к сведению»
-```
+Two implementations, identical output.
 
-### Управлять
+**`files` (default, recommended).** Save the project with Ctrl+S and copy the `.flp` as a
+restore point, arm the tracks, start recording, play from `start`, read the WAVs FL wrote,
+compute the tape, delete them, disarm, restore the previous mode. The `Recorded` folder is
+empty afterwards (verified). FL stays alive and the project is unchanged apart from
+armed-state, which is restored.
 
-```python
-fl.act.param(9, 0, 12, 0.62)     # ручка 12 плагина в слоте 0 канала 9
-fl.act.volume(9, 0.81)           # фейдер
-fl.act.pan(9, -1.0)              # панорама
-fl.act.mute(9, True)             # mute
-fl.monitor.only(9)               # соло
-fl.monitor.listen(9, seconds=10) # послушать и сразу померить
-```
+**`memory` (zero disk).** A Frida hook on `CreateFileW`/`WriteFile` recognises the record
+files, copies the PCM into memory and zeroes the write length, so FL believes it wrote
+while only a 76-byte header reaches disk (removed by `live.clean()`). The hook lives in a
+long-running daemon (`tools-local/hook_daemon.py`, port 9788) so it is attached once per
+session. This is the purest path, and it is the one that occasionally destabilised FL
+during development — hence the default.
 
-### Проверять гипотезы безопасно
+Both modes share: no project reload, no modal dialogs (FL's "Recording" popup is
+suppressed via `PopupRec`), and a save point before every capture.
 
-```python
-x, fs = fl.sim.load("gtr.wav", 60, 80)
-y = fl.sim.run(x, fs, [fl.sim.vst(PRO_Q4, bands=[[300, -4, 0.9]])])
-fl.sim.delta(*fl.sim.compare(x, y, fs))
+Details: [docs/LIVE.md](docs/LIVE.md) · [docs/LIVE.ru.md](docs/LIVE.ru.md)
 
-fl.predict.change(mix_profile, track_profile, -2.0, [(300, -3)])  # без применения
+## The tape
 
-fl.judge.verdict(before, after, {"N_mean": "down"}, corridor=corridor)
-# {'verdict': 'accept', 'reasons': [...], 'damage': []}
-```
+Cell = 0.1 s, window 4096 samples (~93 ms). Fields per cell:
 
-### Создавать
-
-```python
-# вживую, без перезапуска
-fl.create.live_start("test.flp")
-fl.create.live_insert(2, 4, "Fruity Limiter")
-fl.create.live_replace(2, 4, "Fruity Reeverb 2")
-fl.create.live_delete(2, 4)
-fl.create.live_stop()
-
-# вживую в проект, который уже открыт руками — без спавна и перезапуска
-fl.create.live_attach()                 # pid найдётся сам
-fl.create.live_insert(1, 0, r"C:\Programs\VST\FabFilter\FabFilter Pro-Q 4.dll")
-fl.create.live_slots(1)                 # проверка: слот занят
-fl.create.live_delete(1, 0)
-
-# через файл (когда живой режим недоступен)
-fl.create.plugin("...\\FabFilter Pro-Q 4.fst", 19, 0, flp="song.flp")
-fl.create.reload("song.flp")
-```
-
-Плагин по имени ищется только в папке `Plugins\Fruity`; для VST надёжнее
-передавать полный путь к `.dll` — по имени VST не находится.
-
-### Дорожки микшера вживую
-
-```python
-fl.create.live_track_add()            # вставить дорожку в конец
-fl.create.live_track_add(index=5)     # или в конкретное место
-fl.create.live_track_delete(index=5)  # удалить
-fl.create.live_track_count()          # проверить число дорожек
-```
-
-Дорожки создаются и удаляются родными функциями движка (`FLEngine+0xDA7B30`
-и `+0xDA86C0`), поэтому перезапуск проекта не нужен.
-
----
-
-## Как это работает
-
-Подробно — в [ARCHITECTURE.md](ARCHITECTURE.md). Коротко:
-
-* **Слух** — ISO 532-1 (соны, фоны, 240 полос Барка), DIN 45692 (резкость),
-  ECMA-418-2 (грубость и тональность), STOI (разборчивость), маскировка по
-  полосам. Замер калибруется на 90 дБ SPL **по всему треку** — иначе тишина
-  «подтягивается» до нормальной громкости.
-* **Песочница** — настоящие VST3 через `pedalboard`, поэтому проверка
-  гипотезы не отличается от реальной правки.
-* **Живое создание** — Frida инжектится в процесс (отладчики протектор
-  убивает за 0.3 с), находятся родные функции движка и вызываются из
-  главного потока. Слоты адресуются по `+0x160` (канал) и `+0x164` (слот),
-  состояние лежит в `+0x64`.
-* **Приёмка** — каждое решение проверяется по порогам значимости, цели и
-  побочному ущербу, с журналом. Правка, которая «улучшила одно и испортила
-  другое», отклоняется автоматически.
-
----
-
-## Установка
-
-Нужны два окружения: `phonometry` требует Python ≥3.13, `pyflp` и `frida`
-живут на 3.12.
-
-```bash
-uv venv --python 3.13 .venv313
-uv pip install --python .venv313/Scripts/python.exe phonometry soundfile numpy scipy pyloudnorm pystoi pedalboard
-
-uv venv --python 3.12 .venv312
-uv pip install --python .venv312/Scripts/python.exe frida sounddevice "git+https://github.com/stemhub-org/PyFLP_v2.git@dev"
-```
-
----
-
-## С чего читать
-
-`docs/ARCHIVE.md` — указатель на всё прежнее (последние сверху).
-запись дорожек, интерфейс, порядок работ.
-устроена библиотека и почему: принципы, куб картин,
-роли и гранулярность, обход разделения референсов, приоритет записи,
-целевая поверхность. Детали — в `docs/SPEC-CONTEXT.md` (реестр пробелов),
-`docs/ARCHITECTURE-PLAN.md` (слои кода), `docs/DESIGN-BALANCE.md` (баланс).
-
-## Тесты
-
-```bash
-# всё офлайн, одним вызовом (10 файлов, 94 проверки, ~1 мин)
-python tools/run_tests.py
-
-# плюс живые тесты в открытом FL (меняют только small.flp)
-python tools/run_tests.py --fl
-
-# один файл
-python tests/test_wall.py
-```
-
-`tools/run_tests.py` запускает каждый файл отдельным процессом (падение одного
-не рушит остальные), печатает таблицу и возвращает ненулевой код при провале.
-Живые тесты по умолчанию пропускаются: они пишут в проект, а открытым может
-оказаться рабочий.
-
-Что покрыто офлайн: баланс (11), эффекты (5), инверсия микса (6), план
-панорамы (10), частичная громкость (6), транзиенты (8), отчёт и реестр (13), повторы
-моста (8), дымовые слои (17), разборчивость (9), стена и провалы (9), план
-правок (23), точность правок (5), применение плана (6), кэш (8).
-
-Живые (нужен FL и тестовый проект, флаг `--fl`): чистый проект (7), вставка
-плагина (3), дорожки (2), эквалайзер (6), весь план (9), панорама (6),
-парная панорама (7). Каждый живой тест сам проверяет, что открыт именно
-тестовый проект, и иначе останавливается.
-
-Второй тест открывает тестовый проект сам и закрывает его после; путь
-переопределяется через `FLCTRL_TEST_FLP`. Рабочий проект не используется
-никогда — проверка идёт только на чистом.
-
-17 проверок файловых слоёв — чтение проекта, замер, полосы, кривая, профиль,
-секции, сопоставление, песочница, приёмка, предсказание, рендер-сторож и
-определение FL. Живые методы пропускаются: им нужен запущенный FL.
-
----
-
-## Ограничения (проверены, а не предположены)
-
-| Ограничение | Почему |
+| Group | Fields |
 |---|---|
-| Создание **канала** и **клипа** вживую | родная функция не найдена |
-| **VST** вживую | вставляется только `Fruity Wrapper` (без VST внутри): `pluginCreate` поднимает лишь родные .dll и `.dll` VST-хоста; голый `.dll` плагина и путь к `.fst` дают пустой слот, `.fst` резолвер отвергает, `uiInsert` без UI-потока падает. Рабочий путь для VST — файловый (`.flp` + перезагрузка проекта) |
-| Bypass: включение обратно | работает только выключение |
-| Отладчики | протектор Image-Line убивает процесс за 0.3 с |
-| `ctypes` внутри FL | скрипты живут в субинтерпретаторе |
-| Стемы суммировать | Σ специфической громкости даёт 1.55× микса |
-| Гитарный стем сепаратора | SDR ~3 дБ — для баланса непригоден |
-| MOS-метрики (NISQA, SQUIM) | сделаны для речи, к музыке не применимы |
+| Loudness | `rms_db`, `peak`, `crest_db`, `lufs_st` (BS.1770, 400/100 ms blocks) |
+| Dynamics | `attack_s`, `decay_db`, `flux_db`, `zcr`, `hits` |
+| Spectrum | `bands` (28 third-octave), `erb` (24), `centroid_hz`, `spread_hz`, `flatness`, `rolloff_hz` |
+| Tone | `f0_hz`, `note`, `hnr_db`, `chroma` (12), `harm` (2f0…6f0), `inharm`, `formants` |
+| Bands | `low_db`, `mid_db`, `high_db`, `decay_bands` (dB/s), `wall` |
+| Stereo | `corr`, `width`, `pan`, `coherence` (L/R per band) |
 
----
+Per track: `lufs`, `lra`, `sii`, `harmony`, `checks` (DC, clipped samples, mono
+correlation), `transients`, `mod_rate_hz`, `mod_depth`, `jitter_pct`, `technique`.
+Per capture: `masking`, `provenance`, `position`.
 
-## Правила работы, добытые на живых проектах
+Measured sizes: cell ~1.0 KB; one track one second 14.5 KB; 29 tracks × 10 s ≈ 4.1 MB
+(versus 97.6 MB of raw PCM).
 
-Эти вещи неочевидны и стоили падений FL — соблюдать в каждом новом проекте.
+Full reference: [docs/TAPE.md](docs/TAPE.md) · [docs/TAPE.ru.md](docs/TAPE.ru.md)
 
-**1. Не писать параметры очередью.** Каждая запись — сообщение в UI-поток FL.
-Пачка из десятков подряд (особенно на играющем транспорте) роняет движок:
-крэш в `USER32` → `FLEngine+0x246F9E`, чтение нуля по `0x90`. Писать через
-`fl_set_params` / `fl.act.param_batch`: транспорт стоп, пауза ≥0.1 с между
-записями, автосохранение каждые четыре.
+## Events
 
-**2. У полос Pro-Q четыре разных «включено».** Параметров на полосу 23:
-`+0` Band Used (моментальная кнопка, чтение всегда врёт нулём), `+1` Enabled
-(настоящий выключатель), `+2` Frequency, `+3` Gain, `+4` Q, `+5` Shape,
-`+6` Slope. Проверять наличие полосы только по `+1`.
+`events.detect(stereo, fs)` uses a 4 ms envelope with a 2 ms hop and emits `onset`
+(level rise ≥5 dB after a dip, 12 ms refractory), `spike` (+15 dB within 20 ms) and
+`clip` (samples at 0 dBFS). Each onset carries peak, duration, crest, dominant band, band
+levels and centroid.
 
-**3. Split mixer tracks работает только с WAV.** С MP3/OGG/FLAC галочка
-игнорируется. CLI-рендер (`/R`) **не** делит на дорожки — даёт один мастер;
-сплит доступен только через диалог экспорта. Путь `/R` FL понимает как папку.
+| Signal | Spacing | Detected | Expected |
+|---|---|---|---|
+| 300 BPM 32nds | 25 ms | 39 | 40 |
+| Tremolo 20 Hz | 50 ms | 19 | 20 |
+| Tremolo 12 Hz | 83 ms | 11 | 12 |
 
-**4. Пустое имя в диалоге экспорта = рендер в никуда.** FL проходит все такты,
-пишет ноль файлов. Имя подставлять не нужно — своё подставит сама.
+## Save points
 
-**5. Синтетические нажатия в диалогах экспорта роняют FL.** Кнопки DirectUI не
-берут `BM_CLICK`, `SetFocus` не срабатывает, а Keyboard-события приводят к
-крэшу. Диалог экспорта оставлять человеку, автоматизировать только CLI.
+`live.save_project()` brings FL to the foreground, sends Ctrl+S, waits for the file's mtime
+to change, and returns the path. `live.backup()` copies it into `~/Backups/flctrl/`,
+skipping identical states (SHA-1) and pruning to 20 points. If the save cannot be made, it
+falls back to FL's autosave and reports `origin: "autosave"`.
 
-**6. Шина без источников молчит.** Мьютить «всё кроме шины» бессмысленно:
-источники шины тоже глушатся. Для замера шины оставлять её источники.
+Restore = open the snapshot. FL's undo history lives in memory and dies with the process;
+these points survive a crash.
 
-**7. Сравнивать только одинаковые участки.** Замер стема на 180–210 с и живой
-захват на 35-м такте — разные места трека; расхождение профиля на 2–4 пункта
-означает именно это, а не ошибку обработки.
+## API surface
 
-**8. Слух живёт в отдельном окружении.** `phonometry` есть только в 3.13;
-основной процесс (3.12) зовёт `hear_cli.py` подпроцессом. Интерпретатор
-выбирается проверкой `import phonometry`, а не по имени папки.
+`flctrl.api.call(op, args)` is the single entry point; the MCP server wraps it in ten
+tools. Full table: [docs/API.md](docs/API.md) · [docs/API.ru.md](docs/API.ru.md).
 
-**9. Эмбеддинги и стиль требуют torch.** `describe`/`style` идут через
-интерпретатор с torch — искать перебором, а не вбитым путём.
+| Op | Purpose |
+|---|---|
+| `tracks.live` | capture + tape + events + masking + provenance |
+| `tracks.dump` | explicit WAV/MP3 export of tracks |
+| `measure` | metrics of a frame, a file or the live stream |
+| `compare` | delta or corridor between two frames |
+| `clip.at` | what is sounding at a given second or bar |
+| `pan.plan`, `pan.move` | plan and perform pan moves |
+| `eq.set`, `plugin.insert/delete/replace` | live processing changes |
+| `stream.run` | streaming metrics while playing |
+| `inverse.solve` | reference targets → gains for our tracks |
+| `system.health`, `system.doctor` | bridge and library sanity |
 
-**10. У Fortin Nameless параметры пишутся, но не читаются.** `getParamValue`
-возвращает 0.5 для всех ручек, поэтому копировать «значение как есть» нельзя —
-получится ноль. Считать норму от диапазона:
-- проценты (Middle, Treble, Presence, MVC, Bass, Gain): `норма = процент/100`;
-- EQ (250/500/1k/2k/4k, ±12 дБ): `норма = 0.5 + дБ/24`;
-- дистанция кабинета: 1:1 (`0.15` = 0.15 м);
-- уровень кабинета нелинеен: 0.0 → −40 дБ, 0.05 → −14.9, 0.10 → −11.1,
-  0.15 → −8.6, 0.20 → −6.7, 0.35 → −2.8, 0.45 → −0.8;
-- микрофон кабинета (перечисление): 0.00 Dynamic 57, 0.10 Dynamic 421,
-  0.25 Dynamic 906, 0.45 Condenser 184, 0.60 Ribbon 121, 0.80 Ribbon 160,
-  0.95 Custom IR.
-Проверять каждую запись чтением строки — иначе легко «скопировать» усилок в ноль.
+## Repository layout
 
----
+```
+flctrl/          the library
+  live.py        live capture, daemon control, save points, tape assembly
+  timbre.py      feature set: bands, pitch, harmony, loudness, stereo, checks
+  events.py      2 ms event layer
+  incr.py        incremental meters (RMS, bands, LUFS, stereo, transients)
+  frames.py      the cube: frames, comparison, corridors
+  api.py         operations surface
+  fl_lib.py      low-level FL access (bridge, project, mixer, plugins)
+  roles.py       track → role mapping
+  apply.py       applying a plan to live tracks
+  pan.py, panplan.py, invmix.py, decide.py, balance.py, …
+docs/            specification and documentation (EN + RU)
+tests/           unit and live tests
+tools/           test runner and audits
+```
 
-## Состояние
+## Limits
 
-Готово: видеть, слышать, узнавать, управлять, песочница, предсказание,
-приёмка, **живая вставка/удаление/замена плагина**.
+- **Time resolution of the tape** is 100 ms by design; short events are the event layer's
+  job, not the cells'.
+- **Frequency resolution** is 28 third-octave or 24 ERB bands; finer costs size.
+- **Pitch** needs ≥2 periods — 40 ms at 50 Hz. Faster than that, `f0` is unreliable by
+  construction.
+- **Loudness** uses 400 ms blocks with 100 ms steps, so `lufs_st` is short-term, not
+  instantaneous.
+- **Live capture requires record mode** for the duration of the take: a snapshot, not a
+  continuous monitor.
+- **`memory` mode** is zero-disk but was less stable than `files` on FL 25.2.5.
 
-В работе: создание каналов и клипов вживую; калибровка шкалы темпа.
+## Documentation
 
-Тестов: 17, падений: 0.
+| Document | EN | RU |
+|---|---|---|
+| The tape, field by field | [docs/TAPE.md](docs/TAPE.md) | [docs/TAPE.ru.md](docs/TAPE.ru.md) |
+| Live capture internals | [docs/LIVE.md](docs/LIVE.md) | [docs/LIVE.ru.md](docs/LIVE.ru.md) |
+| Mixing against one reference | [docs/REFERENCE.md](docs/REFERENCE.md) | [docs/REFERENCE.ru.md](docs/REFERENCE.ru.md) |
+| API operations | [docs/API.md](docs/API.md) | [docs/API.ru.md](docs/API.ru.md) |
+| Operational rules learned the hard way | [docs/RULES.en.md](docs/RULES.en.md) | [docs/RULES.md](docs/RULES.md) |
+| Design specification | — | [docs/SPEC.md](docs/SPEC.md) |
+| Status | — | [docs/STATUS.md](docs/STATUS.md) |
+
+## Status
+
+Verified on a real project (29 mixer tracks, FL 25.2.5): live per-track capture in both
+modes; the full tape; events up to 40 per second; masking, provenance, roles, save points;
+and a correlation proof that captured tracks are not copies of the master (GTR L1 ↔ GTR R1:
+0.046; the maximum pair, 0.614, is a bus and its source).
+
+Next: the reference frame builder (`reference.frame(path)`) and the closed
+measure → solve → apply → measure loop described in
+[docs/REFERENCE.md](docs/REFERENCE.md).
+
+## License
+
+Private research project. See the repository owner for terms.
