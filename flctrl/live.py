@@ -664,9 +664,10 @@ def _undo_hint() -> dict:
         return {"text": None, "error": str(exc)[:80]}
 
 
-def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
-            fade: bool = True, want_audio: bool = False, mode: str = "memory",
-            discard_take: bool = True) -> dict:
+def _capture_once(tracks=None, seconds: float = 2.0, start: float | None = None,
+                  fade: bool = True, want_audio: bool = False, mode: str = "memory",
+                  discard_take: bool = True) -> dict:
+    """Один тейк по указанным дорожкам. См. capture() — он режет работу на куски."""
     """Снимок звука дорожек. mode="files" — надёжно (FL пишет и сразу удаляем),
     mode="memory" — через хук, на диск не пишется ничего вообще.
 
@@ -683,6 +684,9 @@ def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
     Проверено на живом проекте: снимок отдаёт звук дорожки, а сохранение после него
     не добавляет в плейлист ни одного клипа.
     """
+    if float(seconds) > MAX_SECONDS:
+        return {"error": "тейк длиннее %.0f с не пишем: это вешает FL" % MAX_SECONDS,
+                "tracks": {}, "frames": {}}
     flag0 = clip_flag()
     hint0 = _undo_hint()
     clips = {"before": flag0.get("value"), "during": None, "after": None}
@@ -726,6 +730,95 @@ def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
     res["clips_clean"] = clips["after"] == clips["before"] and undone >= 0
     res["undo"] = {"before": hint0.get("text"), "after": _undo_hint().get("text")}
     return res
+
+
+CHUNK_TRACKS = 3          # дорожек на один тейк в потоковом режиме
+CHUNK_SECONDS = 2.0       # максимум секунд на тейк
+MAX_SECONDS = 6.0         # жёсткий предел: дольше не пишем вообще
+
+
+def _merge_captures(parts: list) -> dict:
+    """Склеить результаты нескольких тейков в один снимок."""
+    out = {"tracks": {}, "frames": {}, "chunks": 0, "bytes": 0,
+           "seconds": parts[0].get("seconds") if parts else None,
+           "start": parts[0].get("start") if parts else None,
+           "cleaned": 0, "parts": len(parts)}
+    for p in parts:
+        out["tracks"].update(p.get("tracks") or {})
+        out["frames"].update(p.get("frames") or {})
+        out["chunks"] += int(p.get("chunks") or 0)
+        out["bytes"] += int(p.get("bytes") or 0)
+        out["cleaned"] += int(p.get("cleaned") or 0)
+        if p.get("error"):
+            out.setdefault("errors", []).append(p["error"])
+    first = parts[0] if parts else {}
+    for key in ("provenance", "position", "backup", "mode_used"):
+        if key in first:
+            out[key] = first[key]
+    out["clips"] = first.get("clips") or {}
+    out["take_discarded"] = min([int(p.get("take_discarded") or 0) for p in parts] or [0])
+    out["clips_clean"] = all(p.get("clips_clean") for p in parts)
+    # маскировка считается по всем дорожкам сразу — уже после склейки
+    try:
+        import timbre
+        tapes = {k: (v.get("tape") or {}) for k, v in out["tracks"].items()}
+        out["masking"] = timbre.masking({k: v for k, v in tapes.items() if v})
+    except Exception as exc:
+        out["masking"] = {"error": str(exc)[:80]}
+    return out
+
+
+def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
+            fade: bool = True, want_audio: bool = False, mode: str = "memory",
+            discard_take: bool = True, chunk_tracks: int | None = None) -> dict:
+    """Снимок звука дорожек, безопасный для любого размера проекта.
+
+    Работа режется на несколько тейков по ``chunk_tracks`` дорожек (по умолчанию
+    ``CHUNK_TRACKS``, в потоковом режиме 6) и не длиннее ``CHUNK_SECONDS``. Так
+    потоковый режим не тащит десятки мегабайт одним сообщением и не вешает FL:
+    тридцать дорожек — это пять коротких тейков, а не один восьмисекундный.
+
+    ``start`` — доля длины проекта 0..1 (так его принимает ``transport.setSongPos``).
+
+    Плейлист не трогается: ``AutoCreateClip`` гасится на время тейка, шаг записи
+    выбрасывается через ``undoUpDown``, флаг возвращается как был.
+    """
+    if not tracks:
+        try:
+            n = int(_num(_bridge("mixer.getTrackCount()")))
+            tracks = list(range(1, n))
+        except OSError:
+            tracks = [1]
+    tracks = [int(x) for x in tracks]
+
+    limit = int(chunk_tracks or CHUNK_TRACKS)
+    secs = float(seconds)
+    # поток не тянет длинные тейки — режем и по времени
+    chunk_secs = min(secs, CHUNK_SECONDS)
+    n_time = int(-(-secs // chunk_secs)) if secs > chunk_secs else 1
+
+    groups = [tracks[i:i + limit] for i in range(0, len(tracks), limit)]
+    parts = []
+    for g in groups:
+        for step in range(n_time):
+            st = None
+            if start is not None:
+                # каждый следующий кусок времени сдвигаем внутри той же доли
+                span = 1.0 / max(n_time, 1)
+                st = min(0.999, max(0.0, float(start) + step * span))
+            part = _capture_once(tracks=g, seconds=chunk_secs, start=st,
+                                 fade=fade, want_audio=want_audio, mode=mode,
+                                 discard_take=discard_take)
+            parts.append(part)
+            if part.get("error"):
+                break
+
+    if len(parts) == 1:
+        return parts[0]
+    merged = _merge_captures(parts)
+    merged["mode_used"] = parts[0].get("mode_used")
+    merged["error"] = next((p["error"] for p in parts if p.get("error")), None)
+    return merged
 
 
 def capture_files(tracks=None, seconds: float = 2.0, start: float | None = None,
