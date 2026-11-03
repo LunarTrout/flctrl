@@ -349,6 +349,22 @@ def call(op: str, args: dict | None = None, fl=None) -> dict:
         return fl.create.live_track_add(a.get("index"), int(a.get("count", 1)))
     if op == "track.delete":
         return fl.create.live_track_delete(int(a["index"]))
+    if op == "plan.apply":
+        edits = a.get("edits") or a.get("plan") or []
+        track_map = a.get("track_map") or {}
+        if not edits or not track_map:
+            raise ApiError("bad_args", op, need=["edits", "track_map"])
+        return fl.apply.plan(edits, track_map, a.get("slot"))
+
+    if op == "eq.set":
+        if "track" not in a or "slot" not in a or not a.get("gains"):
+            raise ApiError("bad_args", op, need=["track", "slot", "gains"])
+        return fl.apply.eq(int(a["track"]), int(a["slot"]), a["gains"])
+
+    if op == "record.start" or op == "record.stop":
+        raise ApiError("not_available", op,
+                       error="запись дорожек появится с tap (см. SPEC §9)")
+
     if op == "system.health":
         return fl.state.health()
     if op == "system.doctor":
