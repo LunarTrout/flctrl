@@ -629,6 +629,15 @@ def call(op: str, args: dict | None = None, fl=None) -> dict:
             return t.record(tracks, float(a.get("seconds", 2.0)), outdir,
                             include_silent=bool(a.get("include_silent", False)))
 
+    if op == "tap.mix":
+        import tap
+        tracks = a.get("tracks")
+        tracks = [int(x) for x in tracks] if tracks else [0]
+        path = a.get("path") or os.path.join(os.environ.get("TEMP", "."), "flmix.wav")
+        with tap.Tap() as t:
+            return t.mix(tracks, float(a.get("seconds", 5.0)), path,
+                         rate_hz=float(a.get("rate_hz", 0.0)), fmt=a.get("fmt"))
+
     if op == "stream.run":
         import stream
         tracks = a.get("tracks")
@@ -1024,6 +1033,8 @@ OPS_HELP = {
                   "игры: rms/пик/28 полос на дорожку + playing_at_start, coverage, "
                   "silent_tracks. Ничего не запускает и не пишет на диск",
     "tap.record": "{tracks, seconds, outdir?} — писать дорожки в WAV",
+    "tap.mix": "{tracks, seconds, path, fmt?} — снять дорожки вживую и сложить в "
+               "один файл (fmt=\"mp3\" — сразу mp3); без рендера проекта",
     "pan.plan": "{stems, a, b, section_s} — план панорамы по секциям",
     "pan.check": "{plan} — проверка шага и зеркальности",
     "pan.move": "{track, points:[[t,pan]], seconds, rate_hz} — вести панораму вживую",
