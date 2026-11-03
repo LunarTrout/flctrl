@@ -201,11 +201,17 @@ def capture(tracks=None, seconds: float = 2.0, start: float | None = None,
             mono[-k:] *= ramp[::-1]
         peak = float(np.abs(mono).max()) if mono.size else 0.0
         rms = float(np.sqrt((mono ** 2).mean())) if mono.size else 0.0
-        out[track if track is not None else -1] = {
+        key = track if track is not None else -1
+        item = {
             "file": base, "name": names.get(track, ""), "seconds": round(len(mono) / 44100, 2),
             "rms": round(rms, 5), "peak": round(peak, 4),
-            "silent": peak < 1e-5, "mono": mono,
+            "silent": peak < 1e-5, "mono": mono, "stereo": stereo,
         }
+        try:
+            item["strip"] = strip(stereo)
+        except Exception as exc:  # noqa: BLE001
+            item["strip_error"] = str(exc)[:120]
+        out[key] = item
 
     return {"tracks": out, "chunks": stats.get("n"), "bytes": stats.get("bytes"),
             "seconds": seconds, "start": start, "armed_before": sorted(armed_before)}
@@ -227,3 +233,80 @@ def clean(folder: str = RECORDED) -> int:
         except OSError:
             pass
     return removed
+
+
+def strip(stereo, fs: int = 44100, hop_s: float = 0.1, nfft: int = 4096) -> dict:
+    """Лента: по отрезкам времени — 28 третьоктав и RMS. Годится для кадра."""
+    import numpy as np
+    try:
+        import incr
+    except ImportError:                      # как пакет flctrl
+        from . import incr
+
+    x = np.asarray(stereo, dtype=float)
+    if x.ndim == 2:
+        x = x.mean(axis=1)
+    fc = np.asarray(incr.FC, dtype=float)
+    freqs = np.fft.rfftfreq(nfft, 1.0 / fs)
+    lo, hi = fc * 10 ** (-1 / 20), fc * 10 ** (1 / 20)
+    M = np.zeros((len(fc), len(freqs)))
+    for i in range(len(fc)):
+        m = (freqs >= lo[i]) & (freqs < hi[i])
+        if not m.any():
+            m[np.argmin(np.abs(freqs - fc[i]))] = True
+        M[i] = m
+    win = np.hanning(nfft)
+    hop = max(1, int(round(hop_s * fs)))
+    times, bands, rms_db, peaks = [], [], [], []
+    for start in range(0, max(0, len(x) - hop // 2), hop):
+        seg = x[start:start + nfft]
+        if len(seg) < nfft:
+            seg = np.pad(seg, (0, nfft - len(seg)))
+        spec = np.abs(np.fft.rfft(seg * win)) ** 2
+        spec *= 2.0 / (np.sum(win ** 2) * nfft)     # синус амплитуды 1 даёт 0 дБ
+        power = M @ spec
+        bands.append([round(float(10 * np.log10(p + 1e-20)), 1) for p in power])
+        r = float(np.sqrt(np.mean(seg ** 2)))
+        rms_db.append(round(20 * np.log10(r + 1e-12), 1))
+        peaks.append(round(float(np.abs(seg).max()), 4))
+        times.append(round(start / fs, 3))
+    return {"hop_s": hop_s, "times": times, "fc": [float(v) for v in fc],
+            "bands": bands, "rms_db": rms_db, "peaks": peaks}
+
+
+def save(tracks=None, seconds: float = 5.0, start: float | None = None,
+         outdir: str | None = None, fmt: str = "wav") -> dict:
+    """Явно выгрузить звук дорожек в файлы (когда аудио реально нужно).
+
+    По умолчанию кадр ничего не пишет; это отдельная команда.
+    """
+    import shutil
+    import soundfile as sf
+
+    outdir = outdir or os.path.join(os.environ.get("TEMP", "."), "fl_tracks")
+    os.makedirs(outdir, exist_ok=True)
+    res = capture(tracks=tracks, seconds=seconds, start=start, fade=False)
+    written = []
+    for track, item in res["tracks"].items():
+        if "stereo" not in item:
+            continue
+        name = (item.get("name") or "track_%s" % track).replace("/", "_").replace("\\", "_")
+        path = os.path.join(outdir, "%02d_%s.%s" % (track if track > 0 else 0, name, fmt))
+        if fmt == "wav":
+            sf.write(path, item["stereo"], 44100, subtype="FLOAT")
+        else:
+            tmp = path + ".wav"
+            sf.write(tmp, item["stereo"], 44100, subtype="FLOAT")
+            ff = os.path.join(os.environ.get("LOCALAPPDATA", ""), "hermes", "tools",
+                              "ffmpeg-9.0.1-win32-x64", "bin", "ffmpeg.exe")
+            subprocess.run([ff, "-y", "-hide_banner", "-loglevel", "error", "-i", tmp,
+                            "-codec:a", "libmp3lame", "-b:a", "256k", path], check=False)
+            os.remove(tmp)
+        written.append(path)
+    for item in res["tracks"].values():
+        item.pop("strip", None)
+        item.pop("mono", None)
+        item.pop("stereo", None)
+    res["files"] = written
+    res["cleaned"] = clean()
+    return res
